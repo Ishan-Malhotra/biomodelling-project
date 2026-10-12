@@ -1,0 +1,11 @@
+[project]
+name = "biomolecular-coordinate-converter"
+version = "1.0.0"
+description = "Convert protein structures between Cartesian and internal coordinates"
+requires-python = ">=3.9"
+dependencies = [
+    "fastapi>=0.115",
+]
+
+[tool.vercel]
+entrypoint = "web.server:app"

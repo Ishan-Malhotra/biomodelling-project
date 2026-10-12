@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Biomolecular coordinate converter</title>
+  <meta name="description" content="Convert protein structures between Cartesian coordinates and internal coordinates (bond lengths, angles, dihedrals).">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Martian+Mono:wdth,wght@75..112.5,300..700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="window">
+    <header class="banner">
+      <h1>Biomolecular coordinate converter</h1>
+      <p class="banner-sub">Cartesian (x, y, z) &harr; Internal (bond, angle, dihedral)</p>
+      <dl class="profile">
+        <dt>Name</dt><dd id="profile-name">&nbsp;</dd>
+        <dt>ID number</dt><dd id="profile-id">&nbsp;</dd>
+        <dt>Structure</dt><dd id="profile-structure">&nbsp;</dd>
+      </dl>
+    </header>
+
+    <section class="choose" aria-labelledby="choose-heading">
+      <h2 id="choose-heading" class="prompt">Which coordinates would you like to enter?</h2>
+      <div class="choices">
+        <button type="button" class="choice" data-mode="cartesian" aria-pressed="false">
+          <span class="key">[1]</span>
+          <span class="choice-title">Cartesian coordinates</span>
+          <span class="choice-desc">x, y, z of each atom, converted to internal coordinates</span>
+        </button>
+        <button type="button" class="choice" data-mode="internal" aria-pressed="false">
+          <span class="key">[2]</span>
+          <span class="choice-title">Internal coordinates</span>
+          <span class="choice-desc">bond lengths, angles and dihedrals, converted to Cartesian</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- Cartesian input -->
+    <section id="panel-cartesian" class="panel" hidden aria-labelledby="cartesian-heading">
+      <h2 id="cartesian-heading" class="panel-title">Enter Cartesian coordinates</h2>
+      <div class="tabs" role="tablist" aria-label="How to enter Cartesian coordinates">
+        <button type="button" role="tab" id="tab-atoms" aria-controls="sub-atoms" aria-selected="true">Fill in atom by atom</button>
+        <button type="button" role="tab" id="tab-paste" aria-controls="sub-paste" aria-selected="false" tabindex="-1">Paste or upload a file</button>
+      </div>
+
+      <div id="sub-atoms" role="tabpanel" aria-labelledby="tab-atoms">
+        <p class="hint">Fill in x, y and z (in Ångström) for each atom. CA is the alpha carbon (Cα), and a new residue starts at each N. You can also paste <code>x y z</code> into one box to fill all three.</p>
+        <div class="table-wrap short">
+          <table class="data atom-form" id="atom-table">
+            <thead>
+              <tr><th class="num">#</th><th>Residue</th><th>Atom</th><th>x (Å)</th><th>y (Å)</th><th>z (Å)</th><th><span class="visually-hidden">Remove</span></th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="toolbar form-tools">
+          <button type="button" class="tool" id="add-next-atom"></button>
+          <button type="button" class="tool" id="add-other-atom">Add a different atom</button>
+          <button type="button" class="tool" data-fill-example="cartesian">Fill with example: crambin residues 1–4</button>
+          <button type="button" class="tool" id="clear-atoms">Clear</button>
+        </div>
+        <div class="actions">
+          <button type="button" class="convert" data-convert="cartesian-form">Convert to internal coordinates</button>
+          <span class="shortcut">Enter moves to the next box</span>
+        </div>
+      </div>
+
+      <div id="sub-paste" role="tabpanel" aria-labelledby="tab-paste" hidden>
+        <p class="hint">Paste a whole PDB file, or one atom per line as <code>NAME&nbsp;&nbsp;X&nbsp;&nbsp;Y&nbsp;&nbsp;Z</code>.</p>
+        <div class="toolbar">
+          <button type="button" class="tool" data-example="protein" data-target="cartesian-text">Example: all of crambin</button>
+          <label class="tool file-tool">Open a file…<input type="file" accept=".pdb,.ent,.txt,.xyz" data-target="cartesian-text"></label>
+          <label class="check"><input type="checkbox" id="backbone-only"> Backbone atoms only (N, CA, C)</label>
+        </div>
+        <label class="visually-hidden" for="cartesian-text">Cartesian coordinates</label>
+        <textarea id="cartesian-text" spellcheck="false" rows="10" placeholder="ATOM      1  N   THR A   1      17.047  14.099   3.625  1.00 13.79           N"></textarea>
+        <div class="actions">
+          <button type="button" class="convert" data-convert="cartesian">Convert to internal coordinates</button>
+          <span class="shortcut">or press Ctrl/⌘ + Enter</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Internal input -->
+    <section id="panel-internal" class="panel" hidden aria-labelledby="internal-heading">
+      <h2 id="internal-heading" class="panel-title">Enter internal coordinates</h2>
+      <div class="tabs" role="tablist" aria-label="Kind of internal coordinates">
+        <button type="button" role="tab" id="tab-zmatrix" aria-controls="sub-zmatrix" aria-selected="true">Z-matrix</button>
+        <button type="button" role="tab" id="tab-backbone" aria-controls="sub-backbone" aria-selected="false">Protein backbone torsions</button>
+      </div>
+
+      <div id="sub-zmatrix" role="tabpanel" aria-labelledby="tab-zmatrix">
+        <p class="hint">One atom per line. Lengths in Å, angles in degrees. The bond is to the previous atom, the angle with the one before that, and the dihedral with the one before that.</p>
+        <pre class="format">Atom 1    NAME
+Atom 2    NAME  bond
+Atom 3    NAME  bond  angle
+Atom 4+   NAME  bond  angle  dihedral</pre>
+        <p class="hint">To choose reference atoms yourself, put the atom number before each value: <code>CB&nbsp;&nbsp;2 1.530&nbsp;&nbsp;1 110.5&nbsp;&nbsp;3 -122.6</code>. Lines starting with # are ignored.</p>
+        <div class="toolbar">
+          <button type="button" class="tool" data-example="zmatrix" data-target="zmatrix-text">Example: crambin residues 1–4</button>
+          <label class="tool file-tool">Open a .zmat file…<input type="file" accept=".zmat,.txt" data-target="zmatrix-text"></label>
+        </div>
+        <label class="visually-hidden" for="zmatrix-text">Z-matrix</label>
+        <textarea id="zmatrix-text" spellcheck="false" rows="10" placeholder="N&#10;CA  1.458&#10;C   1.525  111.2&#10;N   1.329  116.2  -47"></textarea>
+        <div class="actions">
+          <button type="button" class="convert" data-convert="zmatrix">Convert to Cartesian coordinates</button>
+          <span class="shortcut">or press Ctrl/⌘ + Enter</span>
+        </div>
+      </div>
+
+      <div id="sub-backbone" role="tabpanel" aria-labelledby="tab-backbone" hidden>
+        <p class="hint">Build a backbone (N, CA, C atoms) from φ, ψ and ω. Bond lengths and angles use ideal values (Engh &amp; Huber): N–CA 1.458 Å, CA–C 1.525 Å, C–N 1.329 Å; N–CA–C 111.2°, CA–C–N 116.2°, C–N–CA 121.7°.</p>
+        <div class="fields">
+          <label>Number of residues
+            <input type="number" id="bb-count" min="1" max="500" value="8">
+          </label>
+          <label>Sequence <span class="optional">(one-letter code, optional)</span>
+            <input type="text" id="bb-sequence" placeholder="e.g. AGLKV — blank means all alanine" autocomplete="off" spellcheck="false">
+          </label>
+          <label>Conformation
+            <select id="bb-preset">
+              <option value="alpha-helix">α-helix (φ −57, ψ −47)</option>
+              <option value="beta-strand">β-strand (φ −139, ψ 135)</option>
+              <option value="polyproline-II">Polyproline II (φ −75, ψ 145)</option>
+              <option value="extended">Fully extended (φ 180, ψ 180)</option>
+              <option value="custom">Enter φ, ψ, ω for each residue</option>
+            </select>
+          </label>
+        </div>
+        <div id="bb-custom" hidden>
+          <p class="hint">The first residue has no φ and the last has no ψ or ω, because those angles need atoms from a neighbouring residue.</p>
+          <div class="table-wrap short">
+            <table class="data" id="bb-table">
+              <thead><tr><th>Residue</th><th>φ phi (°)</th><th>ψ psi (°)</th><th>ω omega (°)</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="actions">
+          <button type="button" class="convert" data-convert="backbone">Convert to Cartesian coordinates</button>
+        </div>
+      </div>
+    </section>
+
+    <p id="error" class="error" role="alert" hidden></p>
+
+    <!-- Results -->
+    <section id="results" class="results" hidden aria-labelledby="results-heading">
+      <h2 id="results-heading" class="panel-title"></h2>
+      <p id="verify" class="verify"></p>
+      <div class="results-grid">
+        <figure class="viewer">
+          <svg id="viewer" role="img" tabindex="0" aria-label="Structure preview. Use arrow keys to rotate."></svg>
+          <figcaption>Drag (or use arrow keys) to rotate. <span class="legend"><i class="el-N"></i>N <i class="el-C"></i>C <i class="el-O"></i>O <i class="el-S"></i>S</span></figcaption>
+        </figure>
+        <div id="torsions-block" hidden>
+          <h3>Protein backbone torsion angles</h3>
+          <div class="table-wrap short"><table class="data" id="torsions-table"></table></div>
+        </div>
+      </div>
+      <h3 id="main-table-heading"></h3>
+      <p id="main-table-note" class="hint"></p>
+      <div class="table-wrap"><table class="data" id="main-table"></table></div>
+      <div class="actions">
+        <button type="button" class="tool" id="download"></button>
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

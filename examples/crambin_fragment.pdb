@@ -1,0 +1,14 @@
+REMARK   1 Crambin (PDB 1CRN) residues 1-4, backbone N/CA/C
+ATOM      1  N   THR A   1      17.047  14.099   3.625  1.00  0.00           N
+ATOM      2  CA  THR A   1      16.967  12.784   4.338  1.00  0.00           C
+ATOM      3  C   THR A   1      15.685  12.755   5.133  1.00  0.00           C
+ATOM      4  N   THR A   2      15.115  11.555   5.265  1.00  0.00           N
+ATOM      5  CA  THR A   2      13.856  11.469   6.066  1.00  0.00           C
+ATOM      6  C   THR A   2      14.164  10.785   7.379  1.00  0.00           C
+ATOM      7  N   CYS A   3      13.488  11.241   8.417  1.00  0.00           N
+ATOM      8  CA  CYS A   3      13.660  10.707   9.787  1.00  0.00           C
+ATOM      9  C   CYS A   3      12.269  10.431  10.323  1.00  0.00           C
+ATOM     10  N   CYS A   4      12.019   9.272  10.928  1.00  0.00           N
+ATOM     11  CA  CYS A   4      10.646   8.991  11.408  1.00  0.00           C
+ATOM     12  C   CYS A   4      10.654   8.793  12.919  1.00  0.00           C
+END
