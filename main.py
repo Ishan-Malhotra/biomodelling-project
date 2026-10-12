@@ -346,7 +346,7 @@ def show_cartesian_results(atoms):
     print(muted("  Each atom is placed by a bond length to its bonded partner, an angle with"))
     print(muted("  that partner's partner, and a dihedral with the next atom along the chain.\n"))
 
-    if torsions:
+    if has_torsions(torsions):
         print("  " + bold("Protein backbone torsion angles") + "\n")
         print_torsion_table(torsions)
 
@@ -517,7 +517,7 @@ def show_zmatrix_results(entries):
     print(muted("  xy-plane; internal coordinates do not fix the overall position/orientation.\n"))
 
     torsions = conv.backbone_torsions(atoms)
-    if torsions:
+    if has_torsions(torsions):
         print("  " + bold("Protein backbone torsion angles") + "\n")
         print_torsion_table(torsions)
 
