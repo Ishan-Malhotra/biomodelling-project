@@ -415,10 +415,7 @@ function addResidueRow(values = {}) {
 
   const nameCell = document.createElement("td");
   const select = makeResidueSelect(AMINO_ACIDS.includes(values.name) ? values.name : "ALA");
-  select.addEventListener("change", () => {
-    $("#bb-preset").value = "custom";
-    refreshResidueTable();
-  });
+  select.addEventListener("change", refreshResidueTable);
   nameCell.appendChild(select);
   tr.appendChild(nameCell);
 
@@ -432,7 +429,6 @@ function addResidueRow(values = {}) {
     if (field === "o_dihedral") input.placeholder = "ψ+180";
     const kept = values[field];
     input.value = kept !== undefined && kept !== "" ? kept : RESIDUE_DEFAULTS[field];
-    input.addEventListener("input", () => { $("#bb-preset").value = "custom"; });
     td.appendChild(input);
     tr.appendChild(td);
   }
@@ -445,7 +441,6 @@ function addResidueRow(values = {}) {
   remove.addEventListener("click", () => {
     if (residueRows().length <= 1) return;
     tr.remove();
-    $("#bb-preset").value = "custom";
     refreshResidueTable();
     hideError();
   });
@@ -480,11 +475,6 @@ function applyPresetToTable(presetName) {
   })));
 }
 
-function syncBackboneForm() {
-  const preset = $("#bb-preset").value;
-  if (preset !== "custom") applyPresetToTable(preset);
-}
-
 function parseResidueCsv(text) {
   const lines = text.split(/\r?\n/).filter((line) => line.trim() && !line.trim().startsWith("#"));
   const header = (lines.shift() || "").split(",").map((h) => h.trim().toLowerCase());
@@ -508,7 +498,6 @@ function parseResidueCsv(text) {
 }
 
 function fillResidueTable(rows) {
-  $("#bb-preset").value = "custom";
   renderBackboneTable(rows);
   $("#results").hidden = true;
 }
@@ -564,18 +553,10 @@ async function convert(kind) {
       if (!text.trim()) throw new Error("Enter a Z-matrix first, or open a .zmat file.");
       renderResults("to-cartesian", await api("/api/internal-to-cartesian", { text }));
     } else {
-      const rows = currentResidueValues();
-      if (!rows.length) throw new Error("Add at least one residue.");
-      const body = {
-        count: rows.length,
-        sequence: rows.map((row) => THREE_TO_ONE[row.name] || "A").join(""),
-      };
-      if ($("#bb-preset").value === "custom") {
-        body.residues = residueRequestBody();
-      } else {
-        body.preset = $("#bb-preset").value;
-      }
-      renderResults("to-cartesian", await api("/api/backbone-to-cartesian", body));
+      if (!currentResidueValues().length) throw new Error("Add at least one residue.");
+      renderResults("to-cartesian", await api("/api/backbone-to-cartesian", {
+        residues: residueRequestBody(),
+      }));
     }
   } catch (error) {
     showError(error.message);
@@ -846,10 +827,8 @@ function init() {
     });
   }
 
-  $("#bb-preset").addEventListener("change", syncBackboneForm);
   $("#bb-file").addEventListener("change", () => loadResidueFile($("#bb-file")));
   $("#bb-reset").addEventListener("click", () => {
-    $("#bb-preset").value = "alpha-helix";
     applyPresetToTable("alpha-helix");
     hideError();
   });
@@ -864,7 +843,6 @@ function init() {
       o_angle: RESIDUE_DEFAULTS.o_angle,
       o_dihedral: "",
     });
-    $("#bb-preset").value = "custom";
     if (row) row.querySelector("[data-field='name']").focus();
     hideError();
   });
