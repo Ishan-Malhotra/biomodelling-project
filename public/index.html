@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Martian+Mono:wdth,wght@75..112.5,300..700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/style.css?v=2">
+  <link rel="stylesheet" href="/style.css?v=3">
 </head>
 <body>
   <main class="window">
@@ -138,7 +138,9 @@ Atom 4+   NAME  bond  angle  dihedral</pre>
             <table class="data residue-form" id="bb-table">
               <thead><tr>
                 <th>Residue</th><th>φ phi (°)</th><th>ψ psi (°)</th><th>ω omega (°)</th>
-                <th>C=O (Å)</th><th>CA–C–O (°)</th><th>N–CA–C–O (°)</th>
+                <th><span class="col-kind">bond length</span><span class="col-name">C=O (Å)</span></th>
+                <th><span class="col-kind">bond angle</span><span class="col-name">CA–C–O (°)</span></th>
+                <th><span class="col-kind">dihedral (torsion)</span><span class="col-name">N–CA–C–O (°)</span></th>
               </tr></thead>
               <tbody></tbody>
             </table>
@@ -178,6 +180,6 @@ Atom 4+   NAME  bond  angle  dihedral</pre>
     </section>
   </main>
 
-  <script src="/app.js?v=2"></script>
+  <script src="/app.js?v=3"></script>
 </body>
 </html>

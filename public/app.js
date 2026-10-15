@@ -92,10 +92,20 @@ function fillTable(table, headers, rows) {
   table.replaceChildren();
   const thead = table.createTHead();
   const headRow = thead.insertRow();
-  for (const { label, num } of headers) {
+  for (const { label, num, kind } of headers) {
     const th = document.createElement("th");
-    th.textContent = label;
-    if (num) th.className = "num";
+    if (kind) {
+      const kindEl = document.createElement("span");
+      kindEl.className = "col-kind";
+      kindEl.textContent = kind;
+      const nameEl = document.createElement("span");
+      nameEl.className = "col-name";
+      nameEl.textContent = label;
+      th.append(kindEl, nameEl);
+    } else {
+      th.textContent = label;
+    }
+    if (num) th.classList.add("num");
     headRow.appendChild(th);
   }
   const tbody = table.createTBody();
@@ -509,8 +519,11 @@ function fillResidueResults(table, torsions) {
   const headers = [{ label: "Residue" }, { label: "φ phi (°)", num: true }, { label: "ψ psi (°)", num: true },
     { label: "ω omega (°)", num: true }];
   if (withOxygen) {
-    headers.push({ label: "C=O (Å)", num: true }, { label: "CA–C–O (°)", num: true },
-      { label: "N–CA–C–O (°)", num: true });
+    headers.push(
+      { label: "C=O (Å)", num: true, kind: "bond length" },
+      { label: "CA–C–O (°)", num: true, kind: "bond angle" },
+      { label: "N–CA–C–O (°)", num: true, kind: "dihedral (torsion)" },
+    );
   }
   headers.push({ label: "Region", cls: (v) => `region-${v}` });
   fillTable(table, headers, torsions.map((t) => [

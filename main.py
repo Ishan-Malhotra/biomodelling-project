@@ -176,15 +176,19 @@ def fnum(value, digits):
     return "-" if value is None else "{:.{}f}".format(value, digits)
 
 
-def print_table(headers, rows, aligns, limit=None):
+def print_table(headers, rows, aligns, limit=None, kinds=None):
     shown = rows if limit is None or len(rows) <= limit else rows[:limit]
     widths = [max([len(h)] + [len(r[i]) for r in shown]) for i, h in enumerate(headers)]
+    if kinds:
+        widths = [max(w, len(kinds[i] or "")) for i, w in enumerate(widths)]
 
     def fmt(cells):
         return "  " + "  ".join(
             c.rjust(w) if a == "r" else c.ljust(w) for c, w, a in zip(cells, widths, aligns)
         )
 
+    if kinds:
+        print(muted(fmt([(k or "") for k in kinds])))
     print(bold(fmt(headers)))
     print(muted("  " + "  ".join("─" * w for w in widths)))
     for r in shown:
@@ -228,11 +232,14 @@ def print_torsion_table(torsions, limit=None):
     """Per-residue internal coordinates: phi, psi, omega and the carbonyl oxygen."""
     with_oxygen = any(t.o_dihedral is not None for t in torsions)
     headers = ["Residue", "phi φ (°)", "psi ψ (°)", "omega ω (°)"]
+    kinds = ["", "", "", ""]
     aligns = "lrrr"
     if with_oxygen:
         headers += ["C=O (Å)", "CA-C-O (°)", "N-CA-C-O (°)"]
+        kinds += ["bond length", "bond angle", "dihedral (torsion)"]
         aligns += "rrr"
     headers.append("Region")
+    kinds.append("")
     aligns += "l"
     rows = []
     for t in torsions:
@@ -241,7 +248,7 @@ def print_torsion_table(torsions, limit=None):
             row += [fnum(t.o_bond, 3), fnum(t.o_angle, 1), fnum(t.o_dihedral, 1)]
         row.append(conv.ramachandran_region(t.phi, t.psi))
         rows.append(row)
-    print_table(headers, rows, aligns, limit)
+    print_table(headers, rows, aligns, limit, kinds=kinds)
 
 
 # ---------------------------------------------------------------------------

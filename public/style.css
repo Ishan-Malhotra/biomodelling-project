@@ -436,6 +436,26 @@ table.residue-form td { padding: 0.3rem 0.4rem; }
 table.residue-form input { width: 100%; min-width: 4.75rem; text-align: right; }
 .residue-form th:nth-child(n+5) { color: var(--oxygen); }
 
+table.data th .col-kind,
+table.data th .col-name {
+  display: block;
+  line-height: 1.25;
+}
+
+table.data th .col-kind {
+  margin-bottom: 0.15rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 500;
+  text-transform: lowercase;
+  letter-spacing: 0.01em;
+}
+
+table.data th .col-name { font-weight: 600; }
+
+.residue-form th:nth-child(n+5) .col-kind { color: #c98a82; }
+.residue-form th:nth-child(n+5) .col-name { color: var(--oxygen); }
+
 .atom-form td { padding-top: 0.3rem; padding-bottom: 0.3rem; }
 .atom-form .row-residue { color: var(--muted); }
 .atom-form input[data-field="name"] { width: 4.5rem; font-weight: 600; }
