@@ -37,12 +37,21 @@ class ZEntry:
 
 @dataclass
 class ResidueTorsions:
+    """Internal coordinates of one residue: backbone torsions plus its carbonyl oxygen.
+
+    o_bond is the C=O length, o_angle the CA-C-O angle and o_dihedral the
+    N-CA-C-O dihedral.
+    """
+
     res_name: str
     res_seq: int
     chain: str
     phi: Optional[float]
     psi: Optional[float]
     omega: Optional[float]
+    o_bond: Optional[float] = None
+    o_angle: Optional[float] = None
+    o_dihedral: Optional[float] = None
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +218,8 @@ BOND_C_N = 1.329
 ANGLE_N_CA_C = 111.2
 ANGLE_CA_C_N = 116.2
 ANGLE_C_N_CA = 121.7
+BOND_C_O = 1.231
+ANGLE_CA_C_O = 120.5
 
 PEPTIDE_BOND_MAX = 2.0
 
@@ -221,12 +232,13 @@ SECONDARY_STRUCTURE_PRESETS = {
 
 
 def backbone_torsions(atoms: Sequence[Atom]) -> List[ResidueTorsions]:
-    """Compute phi, psi and omega for every residue with complete N, CA, C atoms.
+    """Internal coordinates of every residue with complete N, CA, C atoms.
 
     phi(i)   = C(i-1) - N(i) - CA(i) - C(i)
     psi(i)   = N(i) - CA(i) - C(i) - N(i+1)
     omega(i) = CA(i) - C(i) - N(i+1) - CA(i+1)
-    Torsions that cross a chain break are reported as None.
+    If the residue has its carbonyl O, the C=O length, CA-C-O angle and
+    N-CA-C-O dihedral are included. Torsions that cross a chain break are None.
     """
     residues = []
     index = {}
@@ -235,7 +247,7 @@ def backbone_torsions(atoms: Sequence[Atom]) -> List[ResidueTorsions]:
         if key not in index:
             index[key] = len(residues)
             residues.append((atom.chain, atom.res_seq, atom.res_name, {}))
-        if atom.name in BACKBONE_ATOMS:
+        if atom.name in BACKBONE_ATOMS or atom.name == "O":
             residues[index[key]][3].setdefault(atom.name, atom.xyz)
 
     complete = [r for r in residues if all(name in r[3] for name in BACKBONE_ATOMS)]
@@ -250,51 +262,101 @@ def backbone_torsions(atoms: Sequence[Atom]) -> List[ResidueTorsions]:
         phi = geo.dihedral(prev[3]["C"], bb["N"], bb["CA"], bb["C"]) if prev else None
         psi = geo.dihedral(bb["N"], bb["CA"], bb["C"], nxt[3]["N"]) if nxt else None
         omega = geo.dihedral(bb["CA"], bb["C"], nxt[3]["N"], nxt[3]["CA"]) if nxt else None
-        result.append(ResidueTorsions(res_name, seq, chain, phi, psi, omega))
+        torsions = ResidueTorsions(res_name, seq, chain, phi, psi, omega)
+        if "O" in bb:
+            torsions.o_bond = geo.distance(bb["C"], bb["O"])
+            torsions.o_angle = geo.bond_angle(bb["CA"], bb["C"], bb["O"])
+            torsions.o_dihedral = geo.dihedral(bb["N"], bb["CA"], bb["C"], bb["O"])
+        result.append(torsions)
     return result
 
 
-def build_backbone_zmatrix(res_names: Sequence[str], phis: Sequence[float],
-                           psis: Sequence[float], omegas: Sequence[float]) -> List[ZEntry]:
-    """Z-matrix for an N-CA-C backbone with ideal bond lengths and angles.
+def oxygen_dihedral_from_psi(psi: float) -> float:
+    """N-CA-C-O that keeps O in the peptide plane, opposite N(i+1)."""
+    value = geo.angle_difference(psi + 180.0, 0.0)
+    return 180.0 if value == -180.0 else value
 
-    phis[0] and the last residue's psi and omega are not needed to place any
-    atom, so their values are ignored.
+
+def complete_residues(residues: Sequence[ResidueTorsions]) -> List[ResidueTorsions]:
+    """Check that every residue has the angles needed to build it and fill in oxygen defaults.
+
+    Residue 1 needs no phi and the last residue needs no psi or omega, because
+    those angles involve atoms of a neighbouring residue that does not exist.
+    The oxygen defaults are C=O 1.231 A, CA-C-O 120.5 deg and N-CA-C-O = psi + 180.
     """
+    if not residues:
+        raise ValueError("enter at least one residue")
+    count = len(residues)
+    completed = []
+    for i, r in enumerate(residues):
+        label = "residue {} ({}{})".format(i + 1, r.res_name, r.res_seq)
+        needed = ([("phi", r.phi)] if i > 0 else []) + (
+            [("psi", r.psi), ("omega", r.omega)] if i < count - 1 else [])
+        missing = [name for name, value in needed if value is None]
+        if missing:
+            raise ValueError("{} is missing {}".format(label, " and ".join(missing)))
+        o_dihedral = r.o_dihedral
+        if o_dihedral is None:
+            if r.psi is None:
+                raise ValueError("{} needs psi or an N-CA-C-O dihedral to place its oxygen".format(label))
+            o_dihedral = oxygen_dihedral_from_psi(r.psi)
+        o_bond = BOND_C_O if r.o_bond is None else r.o_bond
+        o_angle = ANGLE_CA_C_O if r.o_angle is None else r.o_angle
+        if o_bond <= 0:
+            raise ValueError("{}: the C=O bond length must be positive".format(label))
+        if not 0 < o_angle < 180:
+            raise ValueError("{}: the CA-C-O angle must be between 0 and 180 degrees".format(label))
+        completed.append(ResidueTorsions(
+            r.res_name, r.res_seq, r.chain,
+            r.phi if i > 0 else None,
+            r.psi,
+            r.omega if i < count - 1 else None,
+            o_bond, o_angle, o_dihedral,
+        ))
+    return completed
+
+
+def build_backbone_zmatrix(residues: Sequence[ResidueTorsions]) -> List[ZEntry]:
+    """Z-matrix for an N, CA, C, O backbone with ideal N-CA-C geometry.
+
+    Atoms are ordered N, CA, C, O within each residue, as in a PDB file.
+    """
+    residues = complete_residues(residues)
     entries: List[ZEntry] = []
-    for i in range(len(res_names)):
-        n_idx = 3 * i
+    for i, r in enumerate(residues):
+        n, ca, c = 4 * i, 4 * i + 1, 4 * i + 2
         if i == 0:
             entries.append(ZEntry("N"))
-            entries.append(ZEntry("CA", 0, BOND_N_CA))
-            entries.append(ZEntry("C", 1, BOND_CA_C, 0, ANGLE_N_CA_C))
-            continue
-        prev_n, prev_ca, prev_c = n_idx - 3, n_idx - 2, n_idx - 1
-        entries.append(ZEntry("N", prev_c, BOND_C_N, prev_ca, ANGLE_CA_C_N, prev_n, psis[i - 1]))
-        entries.append(ZEntry("CA", n_idx, BOND_N_CA, prev_c, ANGLE_C_N_CA, prev_ca, omegas[i - 1]))
-        entries.append(ZEntry("C", n_idx + 1, BOND_CA_C, n_idx, ANGLE_N_CA_C, prev_c, phis[i]))
+            entries.append(ZEntry("CA", n, BOND_N_CA))
+            entries.append(ZEntry("C", ca, BOND_CA_C, n, ANGLE_N_CA_C))
+        else:
+            prev = residues[i - 1]
+            prev_n, prev_ca, prev_c = n - 4, n - 3, n - 2
+            entries.append(ZEntry("N", prev_c, BOND_C_N, prev_ca, ANGLE_CA_C_N, prev_n, prev.psi))
+            entries.append(ZEntry("CA", n, BOND_N_CA, prev_c, ANGLE_C_N_CA, prev_ca, prev.omega))
+            entries.append(ZEntry("C", ca, BOND_CA_C, n, ANGLE_N_CA_C, prev_c, r.phi))
+        entries.append(ZEntry("O", c, r.o_bond, ca, r.o_angle, n, r.o_dihedral))
     return entries
 
 
-def build_backbone(res_names: Sequence[str], phis: Sequence[float],
-                   psis: Sequence[float], omegas: Sequence[float]) -> List[Atom]:
-    """Cartesian N, CA, C atoms for a peptide with the given backbone torsions."""
-    entries = build_backbone_zmatrix(res_names, phis, psis, omegas)
+def build_backbone(residues: Sequence[ResidueTorsions]) -> List[Atom]:
+    """Cartesian N, CA, C, O atoms for a peptide with the given internal coordinates."""
+    entries = build_backbone_zmatrix(residues)
     coords = zmatrix_to_cartesian(entries)
     return [
-        Atom(entry.name, xyz, res_names[i // 3], i // 3 + 1)
+        Atom(entry.name, xyz, residues[i // 4].res_name, residues[i // 4].res_seq, residues[i // 4].chain)
         for i, (entry, xyz) in enumerate(zip(entries, coords))
     ]
 
 
-def backbone_torsion_error(atoms: Sequence[Atom], phis: Sequence[Optional[float]],
-                           psis: Sequence[Optional[float]], omegas: Sequence[Optional[float]]) -> float:
-    """Largest difference between requested torsions and those measured from atoms."""
+def backbone_torsion_error(atoms: Sequence[Atom], residues: Sequence[ResidueTorsions]) -> float:
+    """Largest difference (degrees) between requested angles and those measured from atoms."""
     worst = 0.0
-    for t, phi, psi, omega in zip(backbone_torsions(atoms), phis, psis, omegas):
-        for got, want in ((t.phi, phi), (t.psi, psi), (t.omega, omega)):
-            if got is not None and want is not None:
-                worst = max(worst, abs(geo.angle_difference(got, want)))
+    for got, want in zip(backbone_torsions(atoms), complete_residues(residues)):
+        for measured, requested in ((got.phi, want.phi), (got.psi, want.psi), (got.omega, want.omega),
+                                    (got.o_angle, want.o_angle), (got.o_dihedral, want.o_dihedral)):
+            if measured is not None and requested is not None:
+                worst = max(worst, abs(geo.angle_difference(measured, requested)))
     return worst
 
 

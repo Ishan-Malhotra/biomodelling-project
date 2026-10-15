@@ -1,9 +1,14 @@
-"""Reading and writing coordinates: typed-in lines, PDB files and Z-matrix files."""
+"""Reading and writing coordinates: typed-in lines, PDB files, Z-matrix files and residue tables."""
 
+import csv
+import io as _io
 import os
+import re
 from typing import List, Optional, Sequence, Tuple
 
-from .conversions import Atom, ZEntry, Vec3
+from .conversions import Atom, ResidueTorsions, ZEntry, Vec3
+
+BACKBONE_WITH_OXYGEN = ("N", "CA", "C", "O")
 
 ONE_TO_THREE = {
     "A": "ALA", "R": "ARG", "N": "ASN", "D": "ASP", "C": "CYS",
@@ -124,7 +129,7 @@ def parse_pdb_text(text: str, backbone_only: bool = False) -> List[Atom]:
         if line[16:17] not in (" ", "A", ""):
             continue
         name = line[12:16].strip()
-        if backbone_only and name not in ("N", "CA", "C"):
+        if backbone_only and name not in BACKBONE_WITH_OXYGEN:
             continue
         try:
             atoms.append(Atom(
@@ -161,7 +166,7 @@ def parse_cartesian_text(text: str, backbone_only: bool = False) -> List[Atom]:
             raise ValueError("line {}: {}".format(line_no, exc)) from None
         atoms.append(Atom(name, xyz))
     if backbone_only:
-        atoms = [a for a in atoms if a.name in ("N", "CA", "C")]
+        atoms = [a for a in atoms if a.name in BACKBONE_WITH_OXYGEN]
     return assign_residues(atoms)
 
 
@@ -240,3 +245,69 @@ def zmatrix_text(entries: Sequence[ZEntry], title: Optional[str] = None) -> str:
 def write_zmatrix(entries: Sequence[ZEntry], path: str, title: Optional[str] = None) -> None:
     with open(path, "w") as fh:
         fh.write(zmatrix_text(entries, title))
+
+
+# ---------------------------------------------------------------------------
+# Residue tables (phi, psi, omega and carbonyl oxygen per residue)
+# ---------------------------------------------------------------------------
+
+RESIDUE_COLUMNS = ("residue", "phi", "psi", "omega", "c_o_bond", "ca_c_o_angle", "n_ca_c_o_dihedral")
+
+
+def _cell(value: Optional[float], digits: int) -> str:
+    return "" if value is None else "{:.{}f}".format(value, digits)
+
+
+def residue_table_csv(residues: Sequence[ResidueTorsions]) -> str:
+    """CSV with one row per residue; opens in Excel and loads back into the builder."""
+    buffer = _io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow(RESIDUE_COLUMNS)
+    for r in residues:
+        writer.writerow([
+            "{}{}".format(r.res_name, r.res_seq),
+            _cell(r.phi, 2), _cell(r.psi, 2), _cell(r.omega, 2),
+            _cell(r.o_bond, 3), _cell(r.o_angle, 2), _cell(r.o_dihedral, 2),
+        ])
+    return buffer.getvalue()
+
+
+def parse_residue_csv(text: str) -> List[ResidueTorsions]:
+    lines = [line for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    reader = csv.DictReader(lines)
+    fields = [f.strip().lower() for f in (reader.fieldnames or [])]
+    missing = [c for c in ("residue", "phi", "psi", "omega") if c not in fields]
+    if missing:
+        raise ValueError("the residue table needs the columns: {}".format(", ".join(RESIDUE_COLUMNS)))
+
+    def number(row, key, row_no):
+        raw = (row.get(key) or "").strip()
+        if raw in ("", "-"):
+            return None
+        return _float(raw, "{} in row {}".format(key, row_no))
+
+    residues = []
+    for row_no, raw_row in enumerate(reader, start=1):
+        row = {k.strip().lower(): v for k, v in raw_row.items() if k}
+        match = re.match(r"^\s*([A-Za-z]+)\s*(-?\d+)?\s*$", row.get("residue") or "")
+        if not match:
+            raise ValueError("row {}: residue should look like ALA1".format(row_no))
+        residues.append(ResidueTorsions(
+            res_name=match.group(1).upper()[:3],
+            res_seq=int(match.group(2)) if match.group(2) else row_no,
+            chain="A",
+            phi=number(row, "phi", row_no),
+            psi=number(row, "psi", row_no),
+            omega=number(row, "omega", row_no),
+            o_bond=number(row, "c_o_bond", row_no),
+            o_angle=number(row, "ca_c_o_angle", row_no),
+            o_dihedral=number(row, "n_ca_c_o_dihedral", row_no),
+        ))
+    if not residues:
+        raise ValueError("the residue table has no rows")
+    return residues
+
+
+def read_residue_csv(path: str) -> List[ResidueTorsions]:
+    with open(path) as fh:
+        return parse_residue_csv(fh.read())

@@ -22,6 +22,7 @@ EXAMPLES_DIR = os.path.join(ROOT, "examples")
 PUBLIC_DIR = os.path.join(ROOT, "public")
 
 MAX_ATOMS = 10000
+MAX_RESIDUES = 500
 # The all-pairs distance check is O(n^2), so larger structures use a cheaper check.
 DISTANCE_CHECK_LIMIT = 1500
 
@@ -29,6 +30,7 @@ EXAMPLES = {
     "cartesian": "crambin_fragment.pdb",
     "protein": "1crn.pdb",
     "zmatrix": "crambin_fragment.zmat",
+    "residues": "crambin_fragment.csv",
 }
 
 app = FastAPI(title="Biomolecular coordinate converter")
@@ -43,17 +45,21 @@ class ZMatrixRequest(BaseModel):
     text: str
 
 
-class ResidueTorsionInput(BaseModel):
+class ResidueInput(BaseModel):
+    res_name: Optional[str] = None
     phi: Optional[float] = None
     psi: Optional[float] = None
     omega: Optional[float] = None
+    o_bond: Optional[float] = None
+    o_angle: Optional[float] = None
+    o_dihedral: Optional[float] = None
 
 
 class BackboneRequest(BaseModel):
-    count: int = Field(ge=1, le=500)
+    count: Optional[int] = Field(default=None, ge=1, le=MAX_RESIDUES)
     sequence: str = ""
     preset: Optional[str] = None
-    residues: Optional[List[ResidueTorsionInput]] = None
+    residues: Optional[List[ResidueInput]] = Field(default=None, max_length=MAX_RESIDUES)
 
 
 def bad_request(exc: Exception) -> HTTPException:
@@ -75,12 +81,17 @@ def zentry_json(entry: conv.ZEntry) -> dict:
             "dihedral_ref": ref(entry.dihedral_ref), "dihedral": entry.dihedral}
 
 
-def torsions_json(atoms: List[conv.Atom]) -> List[dict]:
+def residue_torsions(atoms: List[conv.Atom]) -> List[conv.ResidueTorsions]:
     torsions = conv.backbone_torsions(atoms)
-    if not any(t.phi is not None or t.psi is not None for t in torsions):
+    if not any(t.phi is not None or t.psi is not None or t.o_dihedral is not None for t in torsions):
         return []
+    return torsions
+
+
+def torsions_json(torsions: List[conv.ResidueTorsions]) -> List[dict]:
     return [{"residue": "{}{}".format(t.res_name, t.res_seq), "chain": t.chain,
              "phi": t.phi, "psi": t.psi, "omega": t.omega,
+             "o_bond": t.o_bond, "o_angle": t.o_angle, "o_dihedral": t.o_dihedral,
              "region": conv.ramachandran_region(t.phi, t.psi)} for t in torsions]
 
 
@@ -131,13 +142,20 @@ def cartesian_to_internal(req: CartesianRequest):
     else:
         check = internal_check(entries, rebuilt)
 
+    torsions = residue_torsions(atoms)
+    downloads = []
+    if torsions:
+        downloads.append({"label": "Download residue table (.csv)", "filename": "residues.csv",
+                          "text": io.residue_table_csv(torsions)})
+    downloads.append({"label": "Download Z-matrix (.zmat)", "filename": "zmatrix.zmat",
+                      "text": io.zmatrix_text(entries, credit("Z-matrix generated"))})
     return {
         "atoms": [atom_json(a) for a in atoms],
         "zmatrix": [zentry_json(e) for e in entries],
-        "torsions": torsions_json(atoms),
+        "torsions": torsions_json(torsions),
         "bonds": bonds_json(entries),
         "check": check,
-        "download": {"filename": "zmatrix.zmat", "text": io.zmatrix_text(entries, credit("Z-matrix generated"))},
+        "downloads": downloads,
     }
 
 
@@ -155,50 +173,55 @@ def internal_to_cartesian(req: ZMatrixRequest):
     return {
         "atoms": [atom_json(a) for a in atoms],
         "zmatrix": [zentry_json(e) for e in entries],
-        "torsions": torsions_json(atoms),
+        "torsions": torsions_json(residue_torsions(atoms)),
         "bonds": bonds_json(entries),
         "check": internal_check(entries, coords),
-        "download": {"filename": "structure.pdb", "text": io.pdb_text(atoms, credit("Built from a Z-matrix"))},
+        "downloads": [{"label": "Download PDB file", "filename": "structure.pdb",
+                       "text": io.pdb_text(atoms, credit("Built from a Z-matrix"))}],
     }
 
 
 @app.post("/api/backbone-to-cartesian")
 def backbone_to_cartesian(req: BackboneRequest):
     try:
-        res_names = io.sequence_to_residues(req.sequence, req.count)
         if req.preset:
             if req.preset not in conv.SECONDARY_STRUCTURE_PRESETS:
                 raise ValueError("unknown conformation '{}'".format(req.preset))
+            if req.count is None:
+                raise ValueError("enter the number of residues")
             phi, psi, omega = conv.SECONDARY_STRUCTURE_PRESETS[req.preset]
-            phis, psis, omegas = [phi] * req.count, [psi] * req.count, [omega] * req.count
+            residues = [conv.ResidueTorsions(name, i + 1, "A", phi, psi, omega)
+                        for i, name in enumerate(io.sequence_to_residues(req.sequence, req.count))]
         else:
-            residues = req.residues or []
-            if len(residues) != req.count:
-                raise ValueError("expected torsions for {} residues, got {}".format(req.count, len(residues)))
-            phis = [r.phi for r in residues]
-            psis = [r.psi for r in residues]
-            omegas = [r.omega for r in residues]
-            for i in range(req.count):
-                needed = ([("phi", phis[i])] if i > 0 else []) + (
-                    [("psi", psis[i]), ("omega", omegas[i])] if i < req.count - 1 else [])
-                missing = [name for name, value in needed if value is None]
-                if missing:
-                    raise ValueError("residue {} is missing {}".format(i + 1, " and ".join(missing)))
-        phis[0] = None
-        psis[-1] = None
-        omegas[-1] = None
-        entries = conv.build_backbone_zmatrix(res_names, phis, psis, omegas)
-        atoms = conv.build_backbone(res_names, phis, psis, omegas)
+            given = req.residues or []
+            if not given:
+                raise ValueError("enter phi, psi and omega for at least one residue")
+            names = io.sequence_to_residues(req.sequence, len(given))
+            residues = [
+                conv.ResidueTorsions(
+                    (r.res_name or names[i]).strip().upper()[:3] or names[i], i + 1, "A",
+                    r.phi, r.psi, r.omega, r.o_bond, r.o_angle, r.o_dihedral)
+                for i, r in enumerate(given)
+            ]
+        residues = conv.complete_residues(residues)
+        entries = conv.build_backbone_zmatrix(residues)
+        atoms = conv.build_backbone(residues)
     except ValueError as exc:
         raise bad_request(exc) from None
 
     return {
         "atoms": [atom_json(a) for a in atoms],
         "zmatrix": [zentry_json(e) for e in entries],
-        "torsions": torsions_json(atoms),
+        "torsions": torsions_json(conv.backbone_torsions(atoms)),
+        "input": torsions_json(residues),
         "bonds": bonds_json(entries),
-        "check": {"kind": "torsions", "max_error": conv.backbone_torsion_error(atoms, phis, psis, omegas)},
-        "download": {"filename": "backbone.pdb", "text": io.pdb_text(atoms, credit("Backbone built"))},
+        "check": {"kind": "torsions", "max_error": conv.backbone_torsion_error(atoms, residues)},
+        "downloads": [
+            {"label": "Download PDB file", "filename": "backbone.pdb",
+             "text": io.pdb_text(atoms, credit("Backbone built"))},
+            {"label": "Download residue table (.csv)", "filename": "residues.csv",
+             "text": io.residue_table_csv(residues)},
+        ],
     }
 
 

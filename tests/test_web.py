@@ -38,24 +38,42 @@ class WebApiTests(unittest.TestCase):
     def test_zmatrix_round_trip(self):
         zmat = self.client.post("/api/cartesian-to-internal",
                                 json={"text": self.client.get("/api/examples/cartesian").json()["text"]}).json()
-        data = self.client.post("/api/internal-to-cartesian", json={"text": zmat["download"]["text"]}).json()
-        self.assertEqual(len(data["atoms"]), 12)
-        self.assertTrue(data["download"]["text"].startswith("REMARK"))
+        self.assertEqual([d["filename"] for d in zmat["downloads"]], ["residues.csv", "zmatrix.zmat"])
+        self.assertEqual(len(zmat["torsions"]), 4)
+        self.assertIsNotNone(zmat["torsions"][0]["o_dihedral"])
+        data = self.client.post("/api/internal-to-cartesian", json={"text": zmat["downloads"][1]["text"]}).json()
+        self.assertEqual(len(data["atoms"]), 16)
+        self.assertTrue(data["downloads"][0]["text"].startswith("REMARK"))
 
     def test_backbone_preset_and_custom(self):
         helix = self.client.post("/api/backbone-to-cartesian", json={"count": 6, "sequence": "AGK", "preset": "alpha-helix"}).json()
-        self.assertEqual(len(helix["atoms"]), 18)
-        self.assertEqual(helix["atoms"][3]["residue"], "GLY2")
+        self.assertEqual(len(helix["atoms"]), 24)
+        self.assertEqual(helix["atoms"][4]["residue"], "GLY2")
+        self.assertEqual(helix["atoms"][3]["name"], "O")
         self.assertLess(helix["check"]["max_error"], 1e-6)
 
-        residues = [{"phi": None, "psi": 120, "omega": 180}, {"phi": -60, "psi": None, "omega": None}]
-        custom = self.client.post("/api/backbone-to-cartesian", json={"count": 2, "residues": residues})
-        self.assertEqual(custom.status_code, 200)
+        residues = [{"phi": None, "psi": 120, "omega": 180, "o_angle": 121, "o_dihedral": -55},
+                    {"phi": -60, "psi": 140, "omega": None}]
+        custom = self.client.post("/api/backbone-to-cartesian", json={"count": 2, "residues": residues}).json()
+        self.assertAlmostEqual(custom["torsions"][0]["o_angle"], 121, places=6)
+        self.assertAlmostEqual(custom["torsions"][0]["o_dihedral"], -55, places=6)
+        self.assertAlmostEqual(custom["torsions"][1]["o_dihedral"], -40, places=6)
 
         missing = self.client.post("/api/backbone-to-cartesian",
-                                   json={"count": 2, "residues": [{"psi": 120}, {"phi": -60}]})
+                                   json={"count": 2, "residues": [{"psi": 120}, {"phi": -60, "psi": 0}]})
         self.assertEqual(missing.status_code, 400)
         self.assertIn("omega", missing.json()["detail"])
+
+    def test_residue_example_builds(self):
+        from coordconv import io_utils as io
+
+        text = self.client.get("/api/examples/residues").json()["text"]
+        residues = [{"res_name": r.res_name, "phi": r.phi, "psi": r.psi, "omega": r.omega,
+                     "o_bond": r.o_bond, "o_angle": r.o_angle, "o_dihedral": r.o_dihedral}
+                    for r in io.parse_residue_csv(text)]
+        data = self.client.post("/api/backbone-to-cartesian", json={"residues": residues}).json()
+        self.assertEqual([a["residue"] for a in data["atoms"][::4]], ["THR1", "THR2", "CYS3", "CYS4"])
+        self.assertLess(data["check"]["max_error"], 1e-6)
 
 
 if __name__ == "__main__":

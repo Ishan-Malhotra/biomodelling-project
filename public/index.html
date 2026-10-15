@@ -4,17 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Biomolecular coordinate converter</title>
-  <meta name="description" content="Convert protein structures between Cartesian coordinates and internal coordinates (bond lengths, angles, dihedrals).">
+  <meta name="description" content="Convert protein structures between Cartesian coordinates and internal coordinates: φ, ψ, ω and carbonyl oxygen angles per residue.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Martian+Mono:wdth,wght@75..112.5,300..700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/style.css?v=2">
 </head>
 <body>
   <main class="window">
     <header class="banner">
       <h1>Biomolecular coordinate converter</h1>
-      <p class="banner-sub">Cartesian (x, y, z) &harr; Internal (bond, angle, dihedral)</p>
+      <p class="banner-sub">Cartesian (x, y, z) &harr; Internal (φ, ψ, ω and oxygen, per residue)</p>
       <dl class="profile">
         <dt>Name</dt><dd id="profile-name">&nbsp;</dd>
         <dt>ID number</dt><dd id="profile-id">&nbsp;</dd>
@@ -28,12 +28,12 @@
         <button type="button" class="choice" data-mode="cartesian" aria-pressed="false">
           <span class="key">[1]</span>
           <span class="choice-title">Cartesian coordinates</span>
-          <span class="choice-desc">x, y, z of each atom, converted to internal coordinates</span>
+          <span class="choice-desc">x, y, z of each atom, converted to φ, ψ, ω and oxygen angles per residue</span>
         </button>
         <button type="button" class="choice" data-mode="internal" aria-pressed="false">
           <span class="key">[2]</span>
           <span class="choice-title">Internal coordinates</span>
-          <span class="choice-desc">bond lengths, angles and dihedrals, converted to Cartesian</span>
+          <span class="choice-desc">φ, ψ, ω and oxygen angles per residue, converted to x, y, z</span>
         </button>
       </div>
     </section>
@@ -47,7 +47,7 @@
       </div>
 
       <div id="sub-atoms" role="tabpanel" aria-labelledby="tab-atoms">
-        <p class="hint">Fill in x, y and z (in Ångström) for each atom. CA is the alpha carbon (Cα), and a new residue starts at each N. You can also paste <code>x y z</code> into one box to fill all three.</p>
+        <p class="hint">Fill in x, y and z (in Ångström) for the N, CA (alpha carbon, Cα), C and O of each residue. A new residue starts at each N. You can also paste <code>x y z</code> into one box to fill all three.</p>
         <div class="table-wrap short">
           <table class="data atom-form" id="atom-table">
             <thead>
@@ -57,9 +57,9 @@
           </table>
         </div>
         <div class="toolbar form-tools">
+          <button type="button" class="tool" id="add-residue">Add a residue (N, CA, C, O)</button>
           <button type="button" class="tool" id="add-next-atom"></button>
           <button type="button" class="tool" id="add-other-atom">Add a different atom</button>
-          <button type="button" class="tool" data-fill-example="cartesian">Fill with example: crambin residues 1–4</button>
           <button type="button" class="tool" id="clear-atoms">Clear</button>
         </div>
         <div class="actions">
@@ -73,7 +73,7 @@
         <div class="toolbar">
           <button type="button" class="tool" data-example="protein" data-target="cartesian-text">Example: all of crambin</button>
           <label class="tool file-tool">Open a file…<input type="file" accept=".pdb,.ent,.txt,.xyz" data-target="cartesian-text"></label>
-          <label class="check"><input type="checkbox" id="backbone-only"> Backbone atoms only (N, CA, C)</label>
+          <label class="check"><input type="checkbox" id="backbone-only"> Backbone atoms only (N, CA, C, O)</label>
         </div>
         <label class="visually-hidden" for="cartesian-text">Cartesian coordinates</label>
         <textarea id="cartesian-text" spellcheck="false" rows="10" placeholder="ATOM      1  N   THR A   1      17.047  14.099   3.625  1.00 13.79           N"></textarea>
@@ -88,11 +88,11 @@
     <section id="panel-internal" class="panel" hidden aria-labelledby="internal-heading">
       <h2 id="internal-heading" class="panel-title">Enter internal coordinates</h2>
       <div class="tabs" role="tablist" aria-label="Kind of internal coordinates">
-        <button type="button" role="tab" id="tab-zmatrix" aria-controls="sub-zmatrix" aria-selected="true">Z-matrix</button>
-        <button type="button" role="tab" id="tab-backbone" aria-controls="sub-backbone" aria-selected="false">Protein backbone torsions</button>
+        <button type="button" role="tab" id="tab-backbone" aria-controls="sub-backbone" aria-selected="true">φ, ψ, ω and oxygen per residue</button>
+        <button type="button" role="tab" id="tab-zmatrix" aria-controls="sub-zmatrix" aria-selected="false" tabindex="-1">Z-matrix (advanced)</button>
       </div>
 
-      <div id="sub-zmatrix" role="tabpanel" aria-labelledby="tab-zmatrix">
+      <div id="sub-zmatrix" role="tabpanel" aria-labelledby="tab-zmatrix" hidden>
         <p class="hint">One atom per line. Lengths in Å, angles in degrees. The bond is to the previous atom, the angle with the one before that, and the dihedral with the one before that.</p>
         <pre class="format">Atom 1    NAME
 Atom 2    NAME  bond
@@ -111,30 +111,37 @@ Atom 4+   NAME  bond  angle  dihedral</pre>
         </div>
       </div>
 
-      <div id="sub-backbone" role="tabpanel" aria-labelledby="tab-backbone" hidden>
-        <p class="hint">Build a backbone (N, CA, C atoms) from φ, ψ and ω. Bond lengths and angles use ideal values (Engh &amp; Huber): N–CA 1.458 Å, CA–C 1.525 Å, C–N 1.329 Å; N–CA–C 111.2°, CA–C–N 116.2°, C–N–CA 121.7°.</p>
+      <div id="sub-backbone" role="tabpanel" aria-labelledby="tab-backbone">
+        <p class="hint">Enter φ, ψ and ω for each residue, plus the position of its carbonyl oxygen (C=O length, CA–C–O angle and N–CA–C–O dihedral). The backbone atoms N, CA, C and O are then built. The remaining bond lengths and angles use ideal values (Engh &amp; Huber): N–CA 1.458 Å, CA–C 1.525 Å, C–N 1.329 Å; N–CA–C 111.2°, CA–C–N 116.2°, C–N–CA 121.7°.</p>
         <div class="fields">
           <label>Number of residues
-            <input type="number" id="bb-count" min="1" max="500" value="8">
+            <input type="number" id="bb-count" min="1" max="500" value="4">
           </label>
           <label>Sequence <span class="optional">(one-letter code, optional)</span>
             <input type="text" id="bb-sequence" placeholder="e.g. AGLKV — blank means all alanine" autocomplete="off" spellcheck="false">
           </label>
-          <label>Conformation
+          <label>Values
             <select id="bb-preset">
-              <option value="alpha-helix">α-helix (φ −57, ψ −47)</option>
-              <option value="beta-strand">β-strand (φ −139, ψ 135)</option>
-              <option value="polyproline-II">Polyproline II (φ −75, ψ 145)</option>
-              <option value="extended">Fully extended (φ 180, ψ 180)</option>
-              <option value="custom">Enter φ, ψ, ω for each residue</option>
+              <option value="custom">Enter values for each residue</option>
+              <option value="alpha-helix">α-helix preset (φ −57, ψ −47)</option>
+              <option value="beta-strand">β-strand preset (φ −139, ψ 135)</option>
+              <option value="polyproline-II">Polyproline II preset (φ −75, ψ 145)</option>
+              <option value="extended">Fully extended preset (φ 180, ψ 180)</option>
             </select>
           </label>
         </div>
-        <div id="bb-custom" hidden>
-          <p class="hint">The first residue has no φ and the last has no ψ or ω, because those angles need atoms from a neighbouring residue.</p>
+        <div id="bb-custom">
+          <p class="hint">Residue 1 has no φ and the last residue has no ω, because those angles need atoms from a neighbouring residue. Leave N–CA–C–O blank to use ψ + 180°, which keeps O in the peptide plane.</p>
+          <div class="toolbar">
+            <label class="tool file-tool">Open a residue table (.csv)…<input type="file" accept=".csv,.txt" id="bb-file"></label>
+            <button type="button" class="tool" id="bb-reset">Reset to α-helix values</button>
+          </div>
           <div class="table-wrap short">
-            <table class="data" id="bb-table">
-              <thead><tr><th>Residue</th><th>φ phi (°)</th><th>ψ psi (°)</th><th>ω omega (°)</th></tr></thead>
+            <table class="data residue-form" id="bb-table">
+              <thead><tr>
+                <th>Residue</th><th>φ phi (°)</th><th>ψ psi (°)</th><th>ω omega (°)</th>
+                <th>C=O (Å)</th><th>CA–C–O (°)</th><th>N–CA–C–O (°)</th>
+              </tr></thead>
               <tbody></tbody>
             </table>
           </div>
@@ -157,19 +164,22 @@ Atom 4+   NAME  bond  angle  dihedral</pre>
           <figcaption>Drag (or use arrow keys) to rotate. <span class="legend"><i class="el-N"></i>N <i class="el-C"></i>C <i class="el-O"></i>O <i class="el-S"></i>S</span></figcaption>
         </figure>
         <div id="torsions-block" hidden>
-          <h3>Protein backbone torsion angles</h3>
+          <h3>Measured per residue: φ, ψ, ω and oxygen</h3>
           <div class="table-wrap short"><table class="data" id="torsions-table"></table></div>
         </div>
       </div>
       <h3 id="main-table-heading"></h3>
       <p id="main-table-note" class="hint"></p>
       <div class="table-wrap"><table class="data" id="main-table"></table></div>
-      <div class="actions">
-        <button type="button" class="tool" id="download"></button>
-      </div>
+      <details id="zmatrix-details" class="more" hidden>
+        <summary>Show the full Z-matrix (bond length, angle and dihedral for every atom)</summary>
+        <p class="hint">Each atom is placed by a bond length to its bonded partner, an angle with that partner's partner, and a dihedral with the next atom along the chain.</p>
+        <div class="table-wrap"><table class="data" id="zmatrix-table"></table></div>
+      </details>
+      <div class="actions" id="downloads"></div>
     </section>
   </main>
 
-  <script src="/app.js"></script>
+  <script src="/app.js?v=2"></script>
 </body>
 </html>

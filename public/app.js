@@ -6,15 +6,29 @@ const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const MAX_DRAWN_ATOMS = 3000;
 const MAX_DRAWN_BOND = 2.5;
-const TORSION_DEFAULTS = { phi: -57, psi: -47, omega: 180 };
+const RESIDUE_FIELDS = ["phi", "psi", "omega", "o_bond", "o_angle", "o_dihedral"];
+const RESIDUE_DEFAULTS = { phi: -57, psi: -47, omega: 180, o_bond: 1.231, o_angle: 120.5, o_dihedral: "" };
+const RESIDUE_LABELS = {
+  phi: "phi", psi: "psi", omega: "omega",
+  o_bond: "C=O bond length", o_angle: "CA-C-O angle", o_dihedral: "N-CA-C-O dihedral",
+};
+const CSV_COLUMNS = {
+  phi: "phi", psi: "psi", omega: "omega",
+  o_bond: "c_o_bond", o_angle: "ca_c_o_angle", o_dihedral: "n_ca_c_o_dihedral",
+};
+const THREE_TO_ONE = {
+  ALA: "A", ARG: "R", ASN: "N", ASP: "D", CYS: "C", GLN: "Q", GLU: "E", GLY: "G", HIS: "H", ILE: "I",
+  LEU: "L", LYS: "K", MET: "M", PHE: "F", PRO: "P", SER: "S", THR: "T", TRP: "W", TYR: "Y", VAL: "V",
+};
+const ONE_TO_THREE = Object.fromEntries(Object.entries(THREE_TO_ONE).map(([three, one]) => [one, three]));
 
-const BACKBONE_CYCLE = ["N", "CA", "C"];
-const DEFAULT_ATOMS = ["N", "CA", "C", "N"];
+const BACKBONE_CYCLE = ["N", "CA", "C", "O"];
+const DEFAULT_ATOMS = [...BACKBONE_CYCLE, ...BACKBONE_CYCLE];
 const AXES = ["x", "y", "z"];
 
 const state = {
   mode: null,
-  download: null,
+  downloads: [],
   structure: null,
   view: { yaw: 0.6, pitch: -0.35 },
 };
@@ -222,25 +236,6 @@ function resetAtomTable(atoms) {
   for (const atom of atoms) addAtomRow(atom.name, atom.coords);
 }
 
-function parsePdbAtoms(text) {
-  return text.split("\n")
-    .filter((line) => line.startsWith("ATOM"))
-    .map((line) => ({
-      name: line.slice(12, 16).trim(),
-      coords: [line.slice(30, 38), line.slice(38, 46), line.slice(46, 54)].map((v) => v.trim()),
-    }));
-}
-
-async function fillAtomExample(name) {
-  hideError();
-  try {
-    const data = await api(`/api/examples/${name}`);
-    resetAtomTable(parsePdbAtoms(data.text));
-  } catch (error) {
-    showError(error.message);
-  }
-}
-
 function focusNextInput(input) {
   const inputs = $$("#atom-table tbody input");
   const index = inputs.indexOf(input);
@@ -310,6 +305,10 @@ function setupAtomForm() {
     else focusNextInput(event.target);
   });
   table.addEventListener("paste", handleAtomPaste);
+  $("#add-residue").addEventListener("click", () => {
+    const rows = BACKBONE_CYCLE.map((name) => addAtomRow(name));
+    rows[0].querySelector("[data-field='x']").focus();
+  });
   $("#add-next-atom").addEventListener("click", () => {
     addAtomRow(nextBackboneAtom()).querySelector("[data-field='x']").focus();
   });
@@ -320,9 +319,6 @@ function setupAtomForm() {
     resetAtomTable(DEFAULT_ATOMS.map((name) => ({ name })));
     hideError();
   });
-  for (const button of $$("[data-fill-example]")) {
-    button.addEventListener("click", () => fillAtomExample(button.dataset.fillExample));
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -352,13 +348,13 @@ async function loadFile(input) {
 }
 
 // ---------------------------------------------------------------------------
-// Backbone torsion table
+// Per-residue table: phi, psi, omega and the carbonyl oxygen
 // ---------------------------------------------------------------------------
 
-function currentBackboneValues() {
+function currentResidueValues() {
   return $$("#bb-table tbody tr").map((row) => {
     const values = {};
-    for (const input of row.querySelectorAll("input")) values[input.dataset.angle] = input.value;
+    for (const input of row.querySelectorAll("input")) values[input.dataset.field] = input.value;
     return values;
   });
 }
@@ -368,26 +364,32 @@ function backboneCount() {
   return Number.isFinite(count) ? Math.min(Math.max(count, 1), 500) : 1;
 }
 
-function renderBackboneTable() {
-  const previous = currentBackboneValues();
+function residueName(sequence, i) {
+  return ONE_TO_THREE[sequence[i]] || "ALA";
+}
+
+function renderBackboneTable(previous = currentResidueValues()) {
   const count = backboneCount();
   const sequence = $("#bb-sequence").value.replace(/\s+/g, "").toUpperCase();
   const tbody = $("#bb-table tbody");
   tbody.replaceChildren();
   for (let i = 0; i < count; i++) {
     const tr = document.createElement("tr");
-    tr.appendChild(cell(`${i + 1} ${sequence[i] || "A"}`));
-    for (const angle of ["phi", "psi", "omega"]) {
+    const name = residueName(sequence, i);
+    tr.appendChild(cell(`${name}${i + 1}`));
+    for (const field of RESIDUE_FIELDS) {
       const td = document.createElement("td");
       const input = document.createElement("input");
       input.type = "number";
       input.step = "any";
-      input.dataset.angle = angle;
-      input.setAttribute("aria-label", `Residue ${i + 1} ${angle}`);
-      const unused = (angle === "phi" && i === 0) || (angle !== "phi" && i === count - 1);
+      input.inputMode = "decimal";
+      input.dataset.field = field;
+      input.setAttribute("aria-label", `Residue ${i + 1} (${name}) ${RESIDUE_LABELS[field]}`);
+      const unused = (field === "phi" && i === 0) || (field === "omega" && i === count - 1);
       input.disabled = unused;
-      input.value = unused ? "" : (previous[i] && previous[i][angle] !== undefined && previous[i][angle] !== ""
-        ? previous[i][angle] : TORSION_DEFAULTS[angle]);
+      if (field === "o_dihedral") input.placeholder = "ψ+180";
+      const kept = previous[i] && previous[i][field];
+      input.value = unused ? "" : (kept !== undefined && kept !== "" ? kept : RESIDUE_DEFAULTS[field]);
       td.appendChild(input);
       tr.appendChild(td);
     }
@@ -399,6 +401,63 @@ function syncBackboneForm() {
   const custom = $("#bb-preset").value === "custom";
   $("#bb-custom").hidden = !custom;
   if (custom) renderBackboneTable();
+}
+
+function parseResidueCsv(text) {
+  const lines = text.split(/\r?\n/).filter((line) => line.trim() && !line.trim().startsWith("#"));
+  const header = (lines.shift() || "").split(",").map((h) => h.trim().toLowerCase());
+  const column = (name) => header.indexOf(name);
+  if (column("residue") < 0 || column("phi") < 0 || column("psi") < 0 || column("omega") < 0) {
+    throw new Error("The residue table needs the columns: residue, phi, psi, omega, " +
+      "c_o_bond, ca_c_o_angle, n_ca_c_o_dihedral.");
+  }
+  if (!lines.length) throw new Error("The residue table has no rows.");
+  if (lines.length > 500) throw new Error("The web version handles up to 500 residues.");
+  return lines.map((line) => {
+    const cells = line.split(",").map((c) => c.trim());
+    const values = { name: (cells[column("residue")].match(/^[A-Za-z]+/) || ["ALA"])[0].toUpperCase() };
+    for (const field of RESIDUE_FIELDS) {
+      const index = column(CSV_COLUMNS[field]);
+      values[field] = index < 0 || cells[index] === undefined || cells[index] === "-" ? "" : cells[index];
+    }
+    return values;
+  });
+}
+
+function fillResidueTable(rows) {
+  $("#bb-count").value = String(rows.length);
+  $("#bb-sequence").value = rows.map((row) => THREE_TO_ONE[row.name] || "A").join("");
+  $("#bb-preset").value = "custom";
+  $("#bb-custom").hidden = false;
+  renderBackboneTable(rows);
+  $("#results").hidden = true;
+}
+
+async function loadResidueFile(input) {
+  hideError();
+  const file = input.files && input.files[0];
+  input.value = "";
+  if (!file) return;
+  try {
+    if (file.size > MAX_FILE_BYTES) throw new Error("That file is larger than 4 MB.");
+    fillResidueTable(parseResidueCsv(await file.text()));
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+function residueRequestBody() {
+  return currentResidueValues().map((values, i) => {
+    const residue = {};
+    for (const field of RESIDUE_FIELDS) {
+      const raw = values[field];
+      if (raw !== undefined && raw !== "" && Number.isNaN(Number(raw))) {
+        throw new Error(`Residue ${i + 1}: ${RESIDUE_LABELS[field]} must be a number.`);
+      }
+      residue[field] = raw === undefined || raw === "" ? null : Number(raw);
+    }
+    return residue;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -427,14 +486,7 @@ async function convert(kind) {
     } else {
       const body = { count: backboneCount(), sequence: $("#bb-sequence").value };
       if ($("#bb-preset").value === "custom") {
-        body.residues = currentBackboneValues().map((values) => {
-          const residue = {};
-          for (const angle of ["phi", "psi", "omega"]) {
-            const raw = values[angle];
-            residue[angle] = raw === undefined || raw === "" ? null : Number(raw);
-          }
-          return residue;
-        });
+        body.residues = residueRequestBody();
       } else {
         body.preset = $("#bb-preset").value;
       }
@@ -451,48 +503,81 @@ async function convert(kind) {
 function verificationText(check) {
   const exp = (v) => v.toExponential(1);
   if (check.kind === "distances") {
-    return `✓ Rebuilding Cartesian coordinates from this Z-matrix reproduces all ${check.pairs.toLocaleString()} ` +
-      `interatomic distances (largest deviation ${exp(check.max_deviation)} Å).`;
+    return `✓ Rebuilding Cartesian coordinates from these internal coordinates reproduces all ` +
+      `${check.pairs.toLocaleString()} interatomic distances (largest deviation ${exp(check.max_deviation)} Å).`;
   }
   if (check.kind === "torsions") {
-    return `✓ φ, ψ and ω measured back from these coordinates match your input (largest error ${exp(check.max_error)}°).`;
+    return `✓ φ, ψ, ω and the oxygen angles measured back from these coordinates match your input ` +
+      `(largest error ${exp(check.max_error)}°).`;
   }
   return `✓ Measured back from the coordinates, every bond, angle and dihedral matches ` +
     `(largest error ${exp(check.bond)} Å, ${exp(check.angle)}°, ${exp(check.dihedral)}°).`;
 }
 
+function fillResidueResults(table, torsions) {
+  const withOxygen = torsions.some((t) => t.o_dihedral !== null);
+  const headers = [{ label: "Residue" }, { label: "φ phi (°)", num: true }, { label: "ψ psi (°)", num: true },
+    { label: "ω omega (°)", num: true }];
+  if (withOxygen) {
+    headers.push({ label: "C=O (Å)", num: true }, { label: "CA–C–O (°)", num: true },
+      { label: "N–CA–C–O (°)", num: true });
+  }
+  headers.push({ label: "Region", cls: (v) => `region-${v}` });
+  fillTable(table, headers, torsions.map((t) => [
+    t.residue, fmt(t.phi, 1), fmt(t.psi, 1), fmt(t.omega, 1),
+    ...(withOxygen ? [fmt(t.o_bond, 3), fmt(t.o_angle, 1), fmt(t.o_dihedral, 1)] : []),
+    t.region,
+  ]));
+  return withOxygen;
+}
+
+function fillZmatrixTable(table, data) {
+  const ref = (index) => (index === null ? "-" : `${index}:${data.zmatrix[index - 1].name}`);
+  fillTable(table, [
+    { label: "#", num: true }, { label: "Atom" }, { label: "Residue" },
+    { label: "Bonded to" }, { label: "Length (Å)", num: true },
+    { label: "Angle with" }, { label: "Angle (°)", num: true },
+    { label: "Dihedral with" }, { label: "Dihedral (°)", num: true },
+  ], data.zmatrix.map((e, i) => [
+    String(i + 1), e.name, data.atoms[i].residue,
+    ref(e.bond_ref), fmt(e.bond, 4), ref(e.angle_ref), fmt(e.angle, 2), ref(e.dihedral_ref), fmt(e.dihedral, 2),
+  ]));
+}
+
 function renderResults(direction, data) {
   const toInternal = direction === "to-internal";
-  $("#results-heading").textContent = toInternal
-    ? "Result: internal coordinates (Z-matrix)"
-    : "Result: Cartesian coordinates";
+  const hasTorsions = data.torsions.length > 0;
+  const perResidue = toInternal && hasTorsions;
   $("#verify").textContent = verificationText(data.check);
 
-  const hasTorsions = data.torsions.length > 0;
-  $("#torsions-block").hidden = !hasTorsions;
-  if (hasTorsions) {
-    fillTable($("#torsions-table"), [
-      { label: "Residue" }, { label: "φ phi (°)", num: true }, { label: "ψ psi (°)", num: true },
-      { label: "ω omega (°)", num: true }, { label: "Region", cls: (v) => `region-${v}` },
-    ], data.torsions.map((t) => [t.residue, fmt(t.phi, 1), fmt(t.psi, 1), fmt(t.omega, 1), t.region]));
-  }
+  const showSide = !toInternal && hasTorsions;
+  $("#torsions-block").hidden = !showSide;
+  $(".results-grid").classList.toggle("single", !showSide);
+  if (showSide) fillResidueResults($("#torsions-table"), data.torsions);
 
-  const ref = (index) => (index === null ? "-" : `${index}:${data.zmatrix[index - 1].name}`);
-  if (toInternal) {
+  const details = $("#zmatrix-details");
+  details.hidden = toInternal && !hasTorsions;
+  details.open = false;
+
+  if (perResidue) {
+    $("#results-heading").textContent = "Result: internal coordinates per residue";
+    const withOxygen = fillResidueResults($("#main-table"), data.torsions);
+    $("#main-table-heading").textContent = withOxygen
+      ? `φ, ψ, ω and oxygen for ${data.torsions.length} residues`
+      : `φ, ψ and ω for ${data.torsions.length} residues (no O atoms in the input)`;
+    $("#main-table-note").textContent = "φ = C(i−1)–N–CA–C, ψ = N–CA–C–N(i+1), ω = CA–C–N(i+1)–CA(i+1). " +
+      "The oxygen is placed by the C=O length, the CA–C–O angle and the N–CA–C–O dihedral. " +
+      "A dash means the angle needs a neighbouring residue that is not there.";
+    fillZmatrixTable($("#zmatrix-table"), data);
+  } else if (toInternal) {
+    $("#results-heading").textContent = "Result: internal coordinates (Z-matrix)";
     $("#main-table-heading").textContent = `Z-matrix for ${data.atoms.length} atoms`;
-    $("#main-table-note").textContent = "Each atom is placed by a bond length to its bonded partner, an angle with " +
-      "that partner's partner, and a dihedral with the next atom along the chain.";
-    fillTable($("#main-table"), [
-      { label: "#", num: true }, { label: "Atom" }, { label: "Residue" },
-      { label: "Bonded to" }, { label: "Length (Å)", num: true },
-      { label: "Angle with" }, { label: "Angle (°)", num: true },
-      { label: "Dihedral with" }, { label: "Dihedral (°)", num: true },
-    ], data.zmatrix.map((e, i) => [
-      String(i + 1), e.name, data.atoms[i].residue,
-      ref(e.bond_ref), fmt(e.bond, 4), ref(e.angle_ref), fmt(e.angle, 2), ref(e.dihedral_ref), fmt(e.dihedral, 2),
-    ]));
-    $("#download").textContent = "Download Z-matrix (.zmat)";
+    $("#main-table-note").textContent = "No protein backbone (N, CA, C) was found, so the general Z-matrix is shown. " +
+      "Each atom is placed by a bond length to its bonded partner, an angle with that partner's partner, " +
+      "and a dihedral with the next atom along the chain.";
+    fillZmatrixTable($("#main-table"), data);
   } else {
+    $("#results-heading").textContent = "Result: Cartesian coordinates";
     $("#main-table-heading").textContent = `Cartesian coordinates for ${data.atoms.length} atoms`;
     $("#main-table-note").textContent = "Atom 1 is placed at the origin, atom 2 on the +x axis and atom 3 in the " +
       "xy-plane: internal coordinates fix the shape, not the position or orientation.";
@@ -500,22 +585,32 @@ function renderResults(direction, data) {
       { label: "#", num: true }, { label: "Atom" }, { label: "Residue" },
       { label: "x (Å)", num: true }, { label: "y (Å)", num: true }, { label: "z (Å)", num: true },
     ], data.atoms.map((a, i) => [String(i + 1), a.name, a.residue, fmt(a.x, 3), fmt(a.y, 3), fmt(a.z, 3)]));
-    $("#download").textContent = "Download PDB file (.pdb)";
+    fillZmatrixTable($("#zmatrix-table"), data);
   }
 
-  state.download = data.download;
+  state.downloads = data.downloads;
+  $("#downloads").replaceChildren(...data.downloads.map((download, i) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "tool";
+    button.textContent = download.label;
+    button.addEventListener("click", () => downloadResult(i));
+    return button;
+  }));
+
   $("#results").hidden = false;
   setStructure(data.atoms, data.bonds);
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   $("#results").scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
 }
 
-function downloadResult() {
-  if (!state.download) return;
-  const blob = new Blob([state.download.text], { type: "text/plain" });
+function downloadResult(index) {
+  const download = state.downloads[index];
+  if (!download) return;
+  const blob = new Blob([download.text], { type: "text/plain" });
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
-  link.download = state.download.filename;
+  link.download = download.filename;
   document.body.appendChild(link);
   link.click();
   link.remove();
@@ -654,7 +749,7 @@ function init() {
   for (const button of $$("[data-example]")) {
     button.addEventListener("click", () => loadExample(button.dataset.example, button.dataset.target));
   }
-  for (const input of $$(".file-tool input")) input.addEventListener("change", () => loadFile(input));
+  for (const input of $$(".file-tool input[data-target]")) input.addEventListener("change", () => loadFile(input));
 
   for (const button of $$("[data-convert]")) button.addEventListener("click", () => convert(button.dataset.convert));
   for (const [textarea, kind] of [["#cartesian-text", "cartesian"], ["#zmatrix-text", "zmatrix"]]) {
@@ -669,7 +764,9 @@ function init() {
   $("#bb-preset").addEventListener("change", syncBackboneForm);
   $("#bb-count").addEventListener("change", () => { if (!$("#bb-custom").hidden) renderBackboneTable(); });
   $("#bb-sequence").addEventListener("input", () => { if (!$("#bb-custom").hidden) renderBackboneTable(); });
-  $("#download").addEventListener("click", downloadResult);
+  $("#bb-file").addEventListener("change", () => loadResidueFile($("#bb-file")));
+  $("#bb-reset").addEventListener("click", () => renderBackboneTable([]));
+  renderBackboneTable([]);
 
   setupViewer();
   loadProfile();

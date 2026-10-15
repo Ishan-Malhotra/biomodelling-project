@@ -21,6 +21,7 @@ EXAMPLES_DIR = os.path.join(HERE, "examples")
 OUTPUT_DIR = os.path.join(HERE, "output")
 EXAMPLE_PDB = os.path.join(EXAMPLES_DIR, "crambin_fragment.pdb")
 EXAMPLE_ZMAT = os.path.join(EXAMPLES_DIR, "crambin_fragment.zmat")
+EXAMPLE_RESIDUES = os.path.join(EXAMPLES_DIR, "crambin_fragment.csv")
 
 WIDTH = 66
 PREVIEW_ROWS = 20
@@ -99,7 +100,7 @@ def banner(subtitle=None):
 
     print(accent("╔" + "═" * inner + "╗"))
     row("BIOMOLECULAR COORDINATE CONVERTER", bold, center=True)
-    row("Cartesian (x, y, z)  <->  Internal (bond, angle, dihedral)", muted, center=True)
+    row("Cartesian (x, y, z)  <->  Internal (φ, ψ, ω + oxygen)", muted, center=True)
     print(accent("╠" + "═" * inner + "╣"))
     row("Name      : " + STUDENT_NAME)
     row("ID number : " + STUDENT_ID)
@@ -224,35 +225,58 @@ def print_zmatrix_table(entries, atoms=None, limit=None):
 
 
 def has_torsions(torsions):
-    return any(t.phi is not None or t.psi is not None for t in torsions)
+    return any(t.phi is not None or t.psi is not None or t.o_dihedral is not None for t in torsions)
 
 
 def print_torsion_table(torsions, limit=None):
-    rows = [
-        ["{}{}".format(t.res_name, t.res_seq), t.chain, fnum(t.phi, 1), fnum(t.psi, 1),
-         fnum(t.omega, 1), conv.ramachandran_region(t.phi, t.psi)]
-        for t in torsions
-    ]
-    print_table(["Residue", "Chain", "phi φ (°)", "psi ψ (°)", "omega ω (°)", "Region"], rows, "llrrrl", limit)
+    """Per-residue internal coordinates: phi, psi, omega and the carbonyl oxygen."""
+    with_oxygen = any(t.o_dihedral is not None for t in torsions)
+    headers = ["Residue", "phi φ (°)", "psi ψ (°)", "omega ω (°)"]
+    aligns = "lrrr"
+    if with_oxygen:
+        headers += ["C=O (Å)", "CA-C-O (°)", "N-CA-C-O (°)"]
+        aligns += "rrr"
+    headers.append("Region")
+    aligns += "l"
+    rows = []
+    for t in torsions:
+        row = ["{}{}".format(t.res_name, t.res_seq), fnum(t.phi, 1), fnum(t.psi, 1), fnum(t.omega, 1)]
+        if with_oxygen:
+            row += [fnum(t.o_bond, 3), fnum(t.o_angle, 1), fnum(t.o_dihedral, 1)]
+        row.append(conv.ramachandran_region(t.phi, t.psi))
+        rows.append(row)
+    print_table(headers, rows, aligns, limit)
 
 
 # ---------------------------------------------------------------------------
 # Cartesian -> internal
 # ---------------------------------------------------------------------------
 
+BACKBONE_CYCLE = ("N", "CA", "C", "O")
+
+
+def next_backbone_atom(atoms):
+    for atom in reversed(atoms):
+        if atom.name in BACKBONE_CYCLE:
+            return BACKBONE_CYCLE[(BACKBONE_CYCLE.index(atom.name) + 1) % len(BACKBONE_CYCLE)]
+    return "N"
+
+
 def type_cartesian():
     banner("Cartesian → Internal: enter coordinates")
-    print("  Enter one atom per line as   NAME  X  Y  Z   (in Ångström).")
-    print("  Use PDB atom names (N, CA, C, O, CB, ...) so residues are recognised.\n")
-    print(muted("  Example:   N   17.047  14.099  3.625"))
-    print(muted("             CA  16.967  12.784  4.338"))
-    print(muted("             C   15.685  12.755  5.133\n"))
+    print("  The program asks for the N, CA (alpha carbon), C and O of each residue")
+    print("  in turn. Type the x, y and z of each atom in Ångström.\n")
+    print(muted("  Example:   Residue 1  N   > 17.047  14.099  3.625"))
+    print(muted("             Residue 1  CA  > 16.967  12.784  4.338\n"))
+    print(muted("  To enter a different atom, type its name first:  CB 18.170 12.703 5.337"))
     print(muted("  Commands: press Enter (or type 'done') to finish, 'undo' to remove"))
     print(muted("            the last atom, 'cancel' to go back.\n"))
 
     atoms = []
     while True:
-        raw = ask("Atom {}:".format(len(atoms) + 1))
+        expected = next_backbone_atom(atoms)
+        residue = sum(1 for a in atoms if a.name == "N") + (1 if expected == "N" else 0)
+        raw = ask("Residue {}  {:<3s} [x y z]:".format(max(residue, 1), expected))
         command = raw.lower()
         if command in ("", "done"):
             if len(atoms) >= 2:
@@ -267,7 +291,7 @@ def type_cartesian():
         if command in ("cancel", "b", "back"):
             return None
         try:
-            name, xyz = io.parse_cartesian_line(raw, "A{}".format(len(atoms) + 1))
+            name, xyz = io.parse_cartesian_line(raw, expected)
         except ValueError as exc:
             print(bad("    {}".format(exc)))
             continue
@@ -283,7 +307,7 @@ def load_pdb():
         return None
     path = resolve_input_path(raw)
     print()
-    options = [("1", "Backbone atoms only (N, CA, C)"), ("2", "All atoms")]
+    options = [("1", "Backbone atoms only (N, CA, C, O)"), ("2", "All atoms")]
     menu(options)
     backbone_only = choose(options, "Which atoms?") == "1"
     return io.read_pdb(path, backbone_only=backbone_only)
@@ -294,9 +318,9 @@ def cartesian_flow():
         banner("Cartesian → Internal coordinates")
         print("  How would you like to enter the Cartesian coordinates?\n")
         options = [
-            ("1", "Type them in", "one atom per line:  NAME  X  Y  Z"),
+            ("1", "Type them in", "x y z for the N, CA, C and O of each residue"),
             ("2", "Load a PDB file", "e.g. examples/1crn.pdb"),
-            ("3", "Use the example", "backbone of crambin residues 1-4 (12 atoms)"),
+            ("3", "Use the example", "backbone of crambin residues 1-4 (16 atoms)"),
             ("B", "Back to main menu"),
         ]
         menu(options)
@@ -341,19 +365,30 @@ def show_cartesian_results(atoms):
         return "again"
     torsions = conv.backbone_torsions(atoms)
 
-    banner("Result: internal coordinates (Z-matrix)")
-    print_zmatrix_table(entries, atoms)
-    print(muted("  Each atom is placed by a bond length to its bonded partner, an angle with"))
-    print(muted("  that partner's partner, and a dihedral with the next atom along the chain.\n"))
+    is_protein = has_torsions(torsions)
+    title = "Internal coordinates generated by {} ({})".format(STUDENT_NAME, STUDENT_ID)
 
-    if has_torsions(torsions):
-        print("  " + bold("Protein backbone torsion angles") + "\n")
+    def show_zmatrix():
+        print("  " + bold("Full Z-matrix (every atom)") + "\n")
+        print_zmatrix_table(entries, atoms)
+        print(muted("  Each atom is placed by a bond length to its bonded partner, an angle with"))
+        print(muted("  that partner's partner, and a dihedral with the next atom along the chain.\n"))
+
+    if is_protein:
+        banner("Result: internal coordinates per residue")
         print_torsion_table(torsions)
+        print(muted("  phi φ = C(i-1)-N-CA-C    psi ψ = N-CA-C-N(i+1)    omega ω = CA-C-N(i+1)-CA(i+1)"))
+        print(muted("  Oxygen: C=O bond length, CA-C-O bond angle and N-CA-C-O dihedral."))
+        print(muted("  '-' means the angle needs a neighbouring residue that is not there.\n"))
+    else:
+        banner("Result: internal coordinates (Z-matrix)")
+        print(muted("  No protein backbone (N, CA, C) found, so showing the general Z-matrix.\n"))
+        show_zmatrix()
 
     if len(atoms) <= DISTANCE_CHECK_LIMIT:
         deviation = conv.max_distance_deviation([a.xyz for a in atoms], rebuilt)
-        print(good("  ✓ Check: rebuilding Cartesian coordinates from this Z-matrix reproduces all"))
-        print(good("    {} interatomic distances (largest deviation {:.1e} Å).".format(
+        print(good("  ✓ Check: rebuilding Cartesian coordinates from these internal coordinates"))
+        print(good("    reproduces all {} interatomic distances (largest deviation {:.1e} Å).".format(
             len(atoms) * (len(atoms) - 1) // 2, deviation)))
     else:
         bond_err, angle_err, dihedral_err = conv.zmatrix_errors(entries, rebuilt)
@@ -361,23 +396,35 @@ def show_cartesian_results(atoms):
         print(good("    (largest error {:.1e} Å, {:.1e}°, {:.1e}°).".format(bond_err, angle_err, dihedral_err)))
     print()
 
+    save_zmatrix = ("X", "Save the full Z-matrix (.zmat)", lambda: save_prompt(
+        "zmatrix_{}.zmat".format(timestamp()),
+        lambda path: io.write_zmatrix(entries, path, title),
+    ))
+    if not is_protein:
+        return results_menu([save_zmatrix])
+
+    def write_residue_table(path):
+        with open(path, "w") as fh:
+            fh.write(io.residue_table_csv(torsions))
+
     return results_menu([
-        ("S", "Save Z-matrix to a file", lambda: save_prompt(
-            "zmatrix_{}.zmat".format(timestamp()),
-            lambda path: io.write_zmatrix(entries, path, "Z-matrix generated by {} ({})".format(STUDENT_NAME, STUDENT_ID)),
-        )),
+        ("S", "Save the residue table (.csv, opens in Excel)", lambda: save_prompt(
+            "residues_{}.csv".format(timestamp()), write_residue_table)),
+        ("Z", "Show the full Z-matrix (every atom)", show_zmatrix),
+        save_zmatrix,
     ])
 
 
-def results_menu(save_actions):
-    options = [(key, label) for key, label, _ in save_actions] + [
+def results_menu(actions):
+    options = [(key, label) for key, label, _ in actions] + [
         ("N", "New conversion"), ("M", "Main menu")]
-    handlers = {key.lower(): handler for key, _, handler in save_actions}
+    handlers = {key.lower(): handler for key, _, handler in actions}
     menu(options)
     while True:
         choice = choose(options, "What next?")
         if choice in handlers:
             handlers[choice]()
+            menu(options)
         elif choice == "n":
             return "again"
         else:
@@ -393,15 +440,16 @@ def internal_flow():
         banner("Internal → Cartesian coordinates")
         print("  Which internal coordinates would you like to enter?\n")
         options = [
-            ("1", "Z-matrix", "bond lengths, bond angles and dihedral angles, atom by atom"),
-            ("2", "Protein backbone torsions", "phi / psi / omega per residue, with ideal bond geometry"),
+            ("1", "Per residue: phi, psi, omega and oxygen (recommended)",
+             "φ ψ ω plus the CA-C-O and N-CA-C-O angles of each residue's carbonyl oxygen"),
+            ("2", "Z-matrix (advanced)", "bond length, bond angle and dihedral for every atom"),
             ("B", "Back to main menu"),
         ]
         menu(options)
         choice = choose(options)
         if choice == "b":
             return
-        result = zmatrix_flow() if choice == "1" else backbone_flow()
+        result = backbone_flow() if choice == "1" else zmatrix_flow()
         if result == "menu":
             return
 
@@ -464,7 +512,7 @@ def zmatrix_flow():
         options = [
             ("1", "Type them in", "one atom per line:  NAME  bond  angle  dihedral"),
             ("2", "Load a Z-matrix file (.zmat)", "e.g. examples/crambin_fragment.zmat"),
-            ("3", "Use the example", "backbone of crambin residues 1-4 (12 atoms)"),
+            ("3", "Use the example", "backbone of crambin residues 1-4 (16 atoms)"),
             ("B", "Back"),
         ]
         menu(options)
@@ -518,7 +566,7 @@ def show_zmatrix_results(entries):
 
     torsions = conv.backbone_torsions(atoms)
     if has_torsions(torsions):
-        print("  " + bold("Protein backbone torsion angles") + "\n")
+        print("  " + bold("Per-residue internal coordinates (φ, ψ, ω and oxygen)") + "\n")
         print_torsion_table(torsions)
 
     print(good("  ✓ Check: measured back from these coordinates, every bond, angle and"))
@@ -541,86 +589,139 @@ PRESETS = [
 ]
 
 
-def ask_torsions(index, count, res_name):
-    """Ask for the torsions residue `index` actually needs; returns (phi, psi, omega)."""
-    needs = []
-    if index > 0:
-        needs.append("phi")
-    if index < count - 1:
-        needs += ["psi", "omega"]
-    defaults = {"phi": -57.0, "psi": -47.0, "omega": 180.0}
-    default_text = " ".join("{:g}".format(defaults[n]) for n in needs)
+def ask_numbers(prompt, names, defaults):
+    """Ask for len(names) numbers on one line; Enter accepts the defaults. None = go back."""
+    default_text = " ".join("{:g}".format(d) for d in defaults)
     while True:
-        raw = ask("Residue {} {} [{}] (Enter = {}):".format(index + 1, res_name, " ".join(needs), default_text))
+        raw = ask("{} [{}] (Enter = {}):".format(prompt, "  ".join(names), default_text))
         if raw.lower() in ("cancel", "b", "back"):
             return None
         tokens = raw.replace(",", " ").split()
         if not tokens:
-            values = [defaults[n] for n in needs]
-        elif len(tokens) == len(needs):
-            try:
-                values = [float(t) for t in tokens]
-            except ValueError:
-                print(bad("    Please enter numbers only."))
-                continue
-        else:
-            print(bad("    Please enter {} value(s): {}".format(len(needs), " ".join(needs))))
+            return list(defaults)
+        if len(tokens) != len(names):
+            print(bad("    Please enter {} value(s): {}".format(len(names), "  ".join(names))))
             continue
-        chosen = dict(zip(needs, values))
-        return chosen.get("phi"), chosen.get("psi"), chosen.get("omega")
+        try:
+            return [float(t) for t in tokens]
+        except ValueError:
+            print(bad("    Please enter numbers only."))
+
+
+def ask_residue_names():
+    count = ask_int("Number of residues (1-500, 'b' to go back):", 1, 500)
+    if count is None:
+        return None
+    while True:
+        seq = ask("Sequence in one-letter code (optional, Enter = all ALA):")
+        try:
+            return io.sequence_to_residues(seq, count)
+        except ValueError as exc:
+            print(bad("    {}".format(exc)))
+
+
+def type_residues():
+    banner("Internal → Cartesian: type φ, ψ, ω and oxygen per residue")
+    res_names = ask_residue_names()
+    if res_names is None:
+        return None
+    count = len(res_names)
+    print()
+    print("  Each residue takes two lines: its torsions (φ ψ ω), then its oxygen")
+    print("  (the CA-C-O angle and the N-CA-C-O dihedral). Press Enter to accept the")
+    print("  value in brackets. Residue 1 has no φ and the last residue has no ω,")
+    print("  because those angles need a neighbouring residue.")
+    print(muted("  The default N-CA-C-O is ψ + 180°, which keeps O in the peptide plane."))
+    print(muted("  Type 'b' to go back.\n"))
+
+    residues = []
+    for i, name in enumerate(res_names):
+        label = "Residue {} {}".format(i + 1, name)
+        names = (["phi"] if i > 0 else []) + ["psi"] + (["omega"] if i < count - 1 else [])
+        defaults = {"phi": -57.0, "psi": -47.0, "omega": 180.0}
+        values = ask_numbers(label + " torsions", names, [defaults[n] for n in names])
+        if values is None:
+            return None
+        chosen = dict(zip(names, values))
+        psi = chosen["psi"]
+        oxygen = ask_numbers(" " * len(label) + " oxygen  ", ["CA-C-O", "N-CA-C-O"],
+                             [conv.ANGLE_CA_C_O, round(conv.oxygen_dihedral_from_psi(psi), 2)])
+        if oxygen is None:
+            return None
+        residues.append(conv.ResidueTorsions(
+            name, i + 1, "A", chosen.get("phi"), psi, chosen.get("omega"),
+            conv.BOND_C_O, oxygen[0], oxygen[1]))
+        print()
+    return residues
+
+
+def preset_residues():
+    banner("Internal → Cartesian: secondary-structure preset")
+    res_names = ask_residue_names()
+    if res_names is None:
+        return None
+    print()
+    options = [(key, label, desc) for key, _, label, desc in PRESETS]
+    menu(options)
+    choice = choose(options, "Backbone conformation:")
+    phi, psi, omega = conv.SECONDARY_STRUCTURE_PRESETS[PRESETS[int(choice) - 1][1]]
+    return [conv.ResidueTorsions(name, i + 1, "A", phi, psi, omega) for i, name in enumerate(res_names)]
+
+
+def load_residue_table():
+    banner("Internal → Cartesian: load a residue table")
+    print("  Type the path to a .csv file, or drag the file into this window.")
+    print(muted("  Columns: " + ", ".join(io.RESIDUE_COLUMNS)))
+    print(muted("  Residue tables saved from the Cartesian → Internal screen can be loaded here.\n"))
+    raw = ask("Residue table (Enter to go back):")
+    if not raw:
+        return None
+    return io.read_residue_csv(resolve_input_path(raw))
 
 
 def backbone_flow():
     while True:
-        banner("Internal → Cartesian: protein backbone")
-        print("  Build a backbone (N, CA, C atoms) from its torsion angles. Bond lengths")
-        print("  and angles use ideal values (Engh & Huber):")
-        print(muted("    N-CA {} Å, CA-C {} Å, C-N {} Å".format(conv.BOND_N_CA, conv.BOND_CA_C, conv.BOND_C_N)))
+        banner("Internal → Cartesian: φ, ψ, ω and oxygen per residue")
+        print("  Builds the backbone atoms N, CA, C and O of every residue. Bond lengths")
+        print("  and the N-CA-C, CA-C-N and C-N-CA angles use ideal values (Engh & Huber):")
+        print(muted("    N-CA {} Å, CA-C {} Å, C-N {} Å, C=O {} Å".format(
+            conv.BOND_N_CA, conv.BOND_CA_C, conv.BOND_C_N, conv.BOND_C_O)))
         print(muted("    N-CA-C {}°, CA-C-N {}°, C-N-CA {}°\n".format(
             conv.ANGLE_N_CA_C, conv.ANGLE_CA_C_N, conv.ANGLE_C_N_CA)))
-
-        count = ask_int("Number of residues (1-500, 'b' to go back):", 1, 500)
-        if count is None:
-            return "back"
-        while True:
-            seq = ask("Sequence in one-letter code (optional, Enter = all ALA):")
-            try:
-                res_names = io.sequence_to_residues(seq, count)
-                break
-            except ValueError as exc:
-                print(bad("    {}".format(exc)))
-
-        print()
-        options = [(key, label, desc) for key, _, label, desc in PRESETS]
-        options.append(("5", "Enter phi / psi / omega for each residue"))
+        options = [
+            ("1", "Type them in", "φ ψ ω, then the oxygen angles, for each residue"),
+            ("2", "Use a secondary-structure preset", "α-helix, β-strand, polyproline II or extended"),
+            ("3", "Load a residue table (.csv)", "e.g. examples/crambin_fragment.csv"),
+            ("4", "Use the example", "crambin residues 1-4, measured from the crystal structure"),
+            ("B", "Back"),
+        ]
         menu(options)
-        choice = choose(options, "Backbone conformation:")
-        if choice == "5":
-            print()
-            per_residue = []
-            for i, name in enumerate(res_names):
-                values = ask_torsions(i, count, name)
-                if values is None:
-                    break
-                per_residue.append(values)
-            if len(per_residue) < count:
-                continue
-            phis, psis, omegas = (list(column) for column in zip(*per_residue))
-        else:
-            phi, psi, omega = conv.SECONDARY_STRUCTURE_PRESETS[PRESETS[int(choice) - 1][1]]
-            phis, psis, omegas = [phi] * count, [psi] * count, [omega] * count
-
-        phis[0] = None
-        psis[-1] = None
-        omegas[-1] = None
-        torsions = [conv.ResidueTorsions(name, i + 1, "A", phis[i], psis[i], omegas[i])
-                    for i, name in enumerate(res_names)]
+        choice = choose(options)
+        if choice == "b":
+            return "back"
+        try:
+            if choice == "1":
+                residues = type_residues()
+            elif choice == "2":
+                residues = preset_residues()
+            elif choice == "3":
+                residues = load_residue_table()
+            else:
+                residues = io.read_residue_csv(EXAMPLE_RESIDUES)
+            if residues:
+                residues = conv.complete_residues(residues)
+        except (OSError, ValueError) as exc:
+            print(bad("\n    Could not use these values: {}".format(exc)))
+            pause()
+            continue
+        if not residues:
+            continue
 
         banner("Internal → Cartesian: review")
-        print("  {} residues ready to convert:\n".format(count))
-        print_torsion_table(torsions, limit=PREVIEW_ROWS)
-        print(muted("  The first residue has no phi and the last has no psi/omega: those"))
-        print(muted("  angles need atoms from a neighbouring residue that does not exist.\n"))
+        print("  {} residues ready to convert:\n".format(len(residues)))
+        print_torsion_table(residues, limit=PREVIEW_ROWS)
+        print(muted("  The first residue has no φ and the last has no ω: those angles need"))
+        print(muted("  atoms from a neighbouring residue that does not exist.\n"))
         actions = [("C", "Convert to Cartesian coordinates"), ("R", "Re-enter values"), ("B", "Back")]
         menu(actions)
         action = choose(actions)
@@ -628,24 +729,24 @@ def backbone_flow():
             return "back"
         if action == "r":
             continue
-        if show_backbone_results(res_names, phis, psis, omegas) == "menu":
+        if show_backbone_results(residues) == "menu":
             return "menu"
 
 
-def show_backbone_results(res_names, phis, psis, omegas):
+def show_backbone_results(residues):
     try:
-        atoms = conv.build_backbone(res_names, phis, psis, omegas)
+        atoms = conv.build_backbone(residues)
     except ValueError as exc:
         print(bad("\n    Conversion failed at {}".format(exc)))
         pause()
         return "again"
 
-    worst = conv.backbone_torsion_error(atoms, phis, psis, omegas)
+    worst = conv.backbone_torsion_error(atoms, residues)
 
     banner("Result: Cartesian coordinates of the backbone")
     print_cartesian_table(atoms)
-    print(good("  ✓ Check: phi/psi/omega measured back from these coordinates match your"))
-    print(good("    input (largest error {:.1e}°).\n".format(worst)))
+    print(good("  ✓ Check: φ, ψ, ω and the oxygen angles measured back from these"))
+    print(good("    coordinates match your input (largest error {:.1e}°).\n".format(worst)))
     print(muted("  Tip: save as PDB and open it in PyMOL, ChimeraX or VMD to view it.\n"))
 
     return results_menu([
@@ -666,27 +767,33 @@ HELP_TEXT = """\
     file. They describe both the shape of the molecule and where it sits
     and how it is oriented in space.
 
-  INTERNAL COORDINATES (Z-MATRIX)
-    Each atom is described relative to atoms placed before it:
-      bond length    distance to one earlier atom              (Å)
-      bond angle     angle made with a second earlier atom     (°)
-      dihedral       twist about the bond, using a third atom  (°)
-    They describe only the shape, so converting back to Cartesian puts
-    atom 1 at the origin, atom 2 on the x-axis and atom 3 in the xy-plane.
-
-  PROTEIN BACKBONE TORSIONS
-    phi   (φ) = C(i-1) - N(i)  - CA(i)  - C(i)
-    psi   (ψ) = N(i)   - CA(i) - C(i)   - N(i+1)
-    omega (ω) = CA(i)  - C(i)  - N(i+1) - CA(i+1)   (~180° for trans peptides)
+  INTERNAL COORDINATES OF A PROTEIN (PER RESIDUE)
+    Each residue is described by its backbone torsion angles:
+      phi   (φ) = C(i-1) - N(i)  - CA(i)  - C(i)
+      psi   (ψ) = N(i)   - CA(i) - C(i)   - N(i+1)
+      omega (ω) = CA(i)  - C(i)  - N(i+1) - CA(i+1)   (~180° for trans peptides)
+    and by the position of its carbonyl oxygen:
+      C=O bond length (~1.23 Å), CA-C-O angle (~120.5°), N-CA-C-O dihedral
+      (about ψ + 180°, because O sits in the peptide plane opposite N(i+1)).
     Typical values: α-helix φ -57 ψ -47, β-strand φ -139 ψ 135.
+    Other bond lengths and angles are almost constant, so ideal values
+    (Engh & Huber) are used when building Cartesian coordinates.
+
+  Z-MATRIX (ADVANCED)
+    The general form: each atom is described relative to atoms placed
+    before it by a bond length (Å), a bond angle (°) and a dihedral (°).
+    Internal coordinates describe only the shape, so converting back to
+    Cartesian puts atom 1 at the origin, atom 2 on the x-axis and atom 3
+    in the xy-plane.
 
   SIGN CONVENTION
     Dihedrals follow IUPAC: looking along the middle bond, positive means
     the front atom turns clockwise to eclipse the back atom. Range -180..180.
 
   TIPS
-    Type 'q' at any prompt to quit. Saved Z-matrix files (.zmat) can be
-    loaded back on the Internal → Cartesian screen.
+    Type 'q' at any prompt to quit. Saved residue tables (.csv) and
+    Z-matrix files (.zmat) can be loaded back on the Internal → Cartesian
+    screen.
 """
 
 
@@ -701,8 +808,8 @@ def main_menu():
         banner()
         print("  Which coordinates would you like to enter?\n")
         options = [
-            ("1", "Cartesian coordinates", "x, y, z of each atom  →  converted to internal coordinates"),
-            ("2", "Internal coordinates", "bond lengths, angles, dihedrals  →  converted to Cartesian"),
+            ("1", "Cartesian coordinates", "x, y, z of each atom  →  φ, ψ, ω and oxygen angles per residue"),
+            ("2", "Internal coordinates", "φ, ψ, ω and oxygen angles per residue  →  x, y, z of each atom"),
             ("H", "Help: what are these coordinates?"),
             ("Q", "Quit"),
         ]
