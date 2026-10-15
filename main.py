@@ -17,11 +17,7 @@ from coordconv import io_utils as io
 from settings import STRUCTURE_TYPE, STUDENT_ID, STUDENT_NAME
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-EXAMPLES_DIR = os.path.join(HERE, "examples")
 OUTPUT_DIR = os.path.join(HERE, "output")
-EXAMPLE_PDB = os.path.join(EXAMPLES_DIR, "crambin_fragment.pdb")
-EXAMPLE_ZMAT = os.path.join(EXAMPLES_DIR, "crambin_fragment.zmat")
-EXAMPLE_RESIDUES = os.path.join(EXAMPLES_DIR, "crambin_fragment.csv")
 
 WIDTH = 66
 PREVIEW_ROWS = 20
@@ -266,8 +262,8 @@ def type_cartesian():
     banner("Cartesian → Internal: enter coordinates")
     print("  The program asks for the N, CA (alpha carbon), C and O of each residue")
     print("  in turn. Type the x, y and z of each atom in Ångström.\n")
-    print(muted("  Example:   Residue 1  N   > 17.047  14.099  3.625"))
-    print(muted("             Residue 1  CA  > 16.967  12.784  4.338\n"))
+    print(muted("  Example:   Residue 1  N   > 0.000  0.000  0.000"))
+    print(muted("             Residue 1  CA  > 1.458  0.000  0.000\n"))
     print(muted("  To enter a different atom, type its name first:  CB 18.170 12.703 5.337"))
     print(muted("  Commands: press Enter (or type 'done') to finish, 'undo' to remove"))
     print(muted("            the last atom, 'cancel' to go back.\n"))
@@ -300,8 +296,7 @@ def type_cartesian():
 
 def load_pdb():
     banner("Cartesian → Internal: load a PDB file")
-    print("  Type the path to a PDB file, or drag the file into this window.")
-    print(muted("  Example: examples/1crn.pdb  (crambin, 46 residues)\n"))
+    print("  Type the path to a PDB file, or drag the file into this window.\n")
     raw = ask("PDB file (Enter to go back):")
     if not raw:
         return None
@@ -319,8 +314,7 @@ def cartesian_flow():
         print("  How would you like to enter the Cartesian coordinates?\n")
         options = [
             ("1", "Type them in", "x y z for the N, CA, C and O of each residue"),
-            ("2", "Load a PDB file", "e.g. examples/1crn.pdb"),
-            ("3", "Use the example", "backbone of crambin residues 1-4 (16 atoms)"),
+            ("2", "Load a PDB file", "any .pdb file with atomic coordinates"),
             ("B", "Back to main menu"),
         ]
         menu(options)
@@ -330,10 +324,8 @@ def cartesian_flow():
         try:
             if choice == "1":
                 atoms = type_cartesian()
-            elif choice == "2":
-                atoms = load_pdb()
             else:
-                atoms = io.read_pdb(EXAMPLE_PDB)
+                atoms = load_pdb()
         except (OSError, ValueError) as exc:
             print(bad("\n    Could not load the coordinates: {}".format(exc)))
             pause()
@@ -511,8 +503,7 @@ def zmatrix_flow():
         print("  How would you like to enter the internal coordinates?\n")
         options = [
             ("1", "Type them in", "one atom per line:  NAME  bond  angle  dihedral"),
-            ("2", "Load a Z-matrix file (.zmat)", "e.g. examples/crambin_fragment.zmat"),
-            ("3", "Use the example", "backbone of crambin residues 1-4 (16 atoms)"),
+            ("2", "Load a Z-matrix file (.zmat)", "files saved from Cartesian → Internal"),
             ("B", "Back"),
         ]
         menu(options)
@@ -522,10 +513,8 @@ def zmatrix_flow():
         try:
             if choice == "1":
                 entries = type_zmatrix()
-            elif choice == "2":
-                entries = load_zmatrix()
             else:
-                entries = io.read_zmatrix(EXAMPLE_ZMAT)
+                entries = load_zmatrix()
             if entries:
                 conv.validate_zmatrix(entries)
         except (OSError, ValueError) as exc:
@@ -691,8 +680,7 @@ def backbone_flow():
         options = [
             ("1", "Type them in", "φ ψ ω, then the oxygen angles, for each residue"),
             ("2", "Use a secondary-structure preset", "α-helix, β-strand, polyproline II or extended"),
-            ("3", "Load a residue table (.csv)", "e.g. examples/crambin_fragment.csv"),
-            ("4", "Use the example", "crambin residues 1-4, measured from the crystal structure"),
+            ("3", "Load a residue table (.csv)", "files saved from Cartesian → Internal"),
             ("B", "Back"),
         ]
         menu(options)
@@ -704,10 +692,8 @@ def backbone_flow():
                 residues = type_residues()
             elif choice == "2":
                 residues = preset_residues()
-            elif choice == "3":
-                residues = load_residue_table()
             else:
-                residues = io.read_residue_csv(EXAMPLE_RESIDUES)
+                residues = load_residue_table()
             if residues:
                 residues = conv.complete_residues(residues)
         except (OSError, ValueError) as exc:

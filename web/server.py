@@ -18,20 +18,12 @@ from coordconv import conversions as conv
 from coordconv import io_utils as io
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-EXAMPLES_DIR = os.path.join(ROOT, "examples")
 PUBLIC_DIR = os.path.join(ROOT, "public")
 
 MAX_ATOMS = 10000
 MAX_RESIDUES = 500
 # The all-pairs distance check is O(n^2), so larger structures use a cheaper check.
 DISTANCE_CHECK_LIMIT = 1500
-
-EXAMPLES = {
-    "cartesian": "crambin_fragment.pdb",
-    "protein": "1crn.pdb",
-    "zmatrix": "crambin_fragment.zmat",
-    "residues": "crambin_fragment.csv",
-}
 
 app = FastAPI(title="Biomolecular coordinate converter")
 
@@ -113,14 +105,6 @@ def profile():
     return {"name": settings.STUDENT_NAME, "id": settings.STUDENT_ID,
             "structure": settings.STRUCTURE_TYPE,
             "presets": {k: list(v) for k, v in conv.SECONDARY_STRUCTURE_PRESETS.items()}}
-
-
-@app.get("/api/examples/{name}")
-def example(name: str):
-    if name not in EXAMPLES:
-        raise HTTPException(status_code=404, detail="unknown example '{}'".format(name))
-    with open(os.path.join(EXAMPLES_DIR, EXAMPLES[name])) as fh:
-        return {"name": EXAMPLES[name], "text": fh.read()}
 
 
 @app.post("/api/cartesian-to-internal")

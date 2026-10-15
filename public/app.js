@@ -322,18 +322,8 @@ function setupAtomForm() {
 }
 
 // ---------------------------------------------------------------------------
-// Loading examples and files
+// Loading files
 // ---------------------------------------------------------------------------
-
-async function loadExample(name, targetId) {
-  hideError();
-  try {
-    const data = await api(`/api/examples/${name}`);
-    $(`#${targetId}`).value = data.text;
-  } catch (error) {
-    showError(error.message);
-  }
-}
 
 async function loadFile(input) {
   hideError();
@@ -476,12 +466,12 @@ async function convert(kind) {
       renderResults("to-internal", await api("/api/cartesian-to-internal", { text }));
     } else if (kind === "cartesian") {
       const text = $("#cartesian-text").value;
-      if (!text.trim()) throw new Error("Enter some coordinates first, or load an example.");
+      if (!text.trim()) throw new Error("Enter some coordinates first, or open a PDB file.");
       const data = await api("/api/cartesian-to-internal", { text, backbone_only: $("#backbone-only").checked });
       renderResults("to-internal", data);
     } else if (kind === "zmatrix") {
       const text = $("#zmatrix-text").value;
-      if (!text.trim()) throw new Error("Enter a Z-matrix first, or load the example.");
+      if (!text.trim()) throw new Error("Enter a Z-matrix first, or open a .zmat file.");
       renderResults("to-cartesian", await api("/api/internal-to-cartesian", { text }));
     } else {
       const body = { count: backboneCount(), sequence: $("#bb-sequence").value };
@@ -746,9 +736,6 @@ function init() {
   setupTabs();
   setupAtomForm();
 
-  for (const button of $$("[data-example]")) {
-    button.addEventListener("click", () => loadExample(button.dataset.example, button.dataset.target));
-  }
   for (const input of $$(".file-tool input[data-target]")) input.addEventListener("change", () => loadFile(input));
 
   for (const button of $$("[data-convert]")) button.addEventListener("click", () => convert(button.dataset.convert));

@@ -47,7 +47,7 @@ def parse_cartesian_line(line: str, default_name: str) -> Tuple[str, Vec3]:
     elif len(tokens) == 4:
         name, nums = tokens[0], tokens[1:]
     else:
-        raise ValueError("expected NAME X Y Z (e.g. 'CA 16.967 12.784 4.338')")
+        raise ValueError("expected NAME X Y Z (e.g. 'CA 1.458 0.000 0.000')")
     x, y, z = (_float(t, axis) for t, axis in zip(nums, "xyz"))
     return name, (x, y, z)
 

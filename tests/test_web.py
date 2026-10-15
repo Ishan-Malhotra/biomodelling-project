@@ -20,11 +20,13 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("alpha-helix", profile["presets"])
         self.assertIn("text/html", self.client.get("/").headers["content-type"])
 
-    def test_cartesian_to_internal_with_pdb_example(self):
-        text = self.client.get("/api/examples/protein").json()["text"]
+    def test_cartesian_to_internal_from_built_helix(self):
+        helix = self.client.post("/api/backbone-to-cartesian",
+                                 json={"count": 8, "sequence": "AGKV", "preset": "alpha-helix"}).json()
+        text = helix["downloads"][0]["text"]
         data = self.client.post("/api/cartesian-to-internal", json={"text": text}).json()
-        self.assertEqual(len(data["atoms"]), 327)
-        self.assertEqual(len(data["torsions"]), 46)
+        self.assertEqual(len(data["atoms"]), 32)
+        self.assertEqual(len(data["torsions"]), 8)
         self.assertEqual(data["check"]["kind"], "distances")
         self.assertLess(data["check"]["max_deviation"], 1e-9)
 
@@ -36,8 +38,10 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("line 2", bad.json()["detail"])
 
     def test_zmatrix_round_trip(self):
+        helix = self.client.post("/api/backbone-to-cartesian",
+                                 json={"count": 4, "preset": "alpha-helix"}).json()
         zmat = self.client.post("/api/cartesian-to-internal",
-                                json={"text": self.client.get("/api/examples/cartesian").json()["text"]}).json()
+                                json={"text": helix["downloads"][0]["text"]}).json()
         self.assertEqual([d["filename"] for d in zmat["downloads"]], ["residues.csv", "zmatrix.zmat"])
         self.assertEqual(len(zmat["torsions"]), 4)
         self.assertIsNotNone(zmat["torsions"][0]["o_dihedral"])
@@ -46,7 +50,8 @@ class WebApiTests(unittest.TestCase):
         self.assertTrue(data["downloads"][0]["text"].startswith("REMARK"))
 
     def test_backbone_preset_and_custom(self):
-        helix = self.client.post("/api/backbone-to-cartesian", json={"count": 6, "sequence": "AGK", "preset": "alpha-helix"}).json()
+        helix = self.client.post("/api/backbone-to-cartesian",
+                                 json={"count": 6, "sequence": "AGK", "preset": "alpha-helix"}).json()
         self.assertEqual(len(helix["atoms"]), 24)
         self.assertEqual(helix["atoms"][4]["residue"], "GLY2")
         self.assertEqual(helix["atoms"][3]["name"], "O")
@@ -64,15 +69,17 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(missing.status_code, 400)
         self.assertIn("omega", missing.json()["detail"])
 
-    def test_residue_example_builds(self):
+    def test_residue_csv_builds(self):
+        helix = self.client.post("/api/backbone-to-cartesian",
+                                 json={"count": 4, "sequence": "AGKV", "preset": "beta-strand"}).json()
+        csv_text = helix["downloads"][1]["text"]
         from coordconv import io_utils as io
 
-        text = self.client.get("/api/examples/residues").json()["text"]
         residues = [{"res_name": r.res_name, "phi": r.phi, "psi": r.psi, "omega": r.omega,
                      "o_bond": r.o_bond, "o_angle": r.o_angle, "o_dihedral": r.o_dihedral}
-                    for r in io.parse_residue_csv(text)]
+                    for r in io.parse_residue_csv(csv_text)]
         data = self.client.post("/api/backbone-to-cartesian", json={"residues": residues}).json()
-        self.assertEqual([a["residue"] for a in data["atoms"][::4]], ["THR1", "THR2", "CYS3", "CYS4"])
+        self.assertEqual([a["residue"] for a in data["atoms"][::4]], ["ALA1", "GLY2", "LYS3", "VAL4"])
         self.assertLess(data["check"]["max_error"], 1e-6)
 
 

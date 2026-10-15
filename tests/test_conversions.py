@@ -8,8 +8,15 @@ from coordconv import conversions as conv
 from coordconv import geometry as geo
 from coordconv import io_utils as io
 
-EXAMPLES = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "examples")
-CRAMBIN = os.path.join(EXAMPLES, "1crn.pdb")
+
+def helix_residues(n, sequence=""):
+    phi, psi, omega = conv.SECONDARY_STRUCTURE_PRESETS["alpha-helix"]
+    names = io.sequence_to_residues(sequence, n)
+    return [conv.ResidueTorsions(name, i + 1, "A", phi, psi, omega) for i, name in enumerate(names)]
+
+
+def helix_atoms(n, sequence=""):
+    return conv.build_backbone(helix_residues(n, sequence))
 
 
 class GeometryTests(unittest.TestCase):
@@ -32,14 +39,14 @@ class GeometryTests(unittest.TestCase):
 
 
 class RoundTripTests(unittest.TestCase):
-    def test_crambin_all_atoms_round_trip(self):
-        atoms = io.read_pdb(CRAMBIN)
+    def test_built_backbone_round_trip(self):
+        atoms = helix_atoms(12, "AGKV")
         entries = conv.cartesian_to_zmatrix(atoms)
         rebuilt = conv.zmatrix_to_cartesian(entries)
         self.assertLess(conv.max_distance_deviation([a.xyz for a in atoms], rebuilt), 1e-9)
 
     def test_zmatrix_round_trip_through_file(self):
-        atoms = io.read_pdb(CRAMBIN, backbone_only=True)
+        atoms = helix_atoms(8)
         entries = conv.cartesian_to_zmatrix(atoms)
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "test.zmat")
@@ -50,27 +57,24 @@ class RoundTripTests(unittest.TestCase):
         self.assertLess(conv.max_distance_deviation([a.xyz for a in atoms], rebuilt), 0.05)
 
     def test_references_follow_bonds(self):
-        atoms = io.read_pdb(CRAMBIN)
+        atoms = helix_atoms(10)
         entries = conv.cartesian_to_zmatrix(atoms)
         for i, e in enumerate(entries[1:], start=1):
             self.assertLess(e.bond, 2.1, "atom {} {} bonded to {}".format(i + 1, e.name, entries[e.bond_ref].name))
 
 
 class ProteinTests(unittest.TestCase):
-    def test_crambin_helix_torsions(self):
-        torsions = {t.res_seq: t for t in conv.backbone_torsions(io.read_pdb(CRAMBIN))}
-        self.assertEqual(len(torsions), 46)
-        self.assertIsNone(torsions[1].phi)
-        self.assertIsNone(torsions[46].psi)
-        # Crambin residues 7-19 form an alpha-helix.
-        for seq in range(8, 18):
-            self.assertEqual(conv.ramachandran_region(torsions[seq].phi, torsions[seq].psi), "alpha-R")
-        for t in torsions.values():
-            if t.omega is not None:
-                self.assertGreater(abs(t.omega), 160)
+    def test_helix_ramachandran_regions(self):
+        torsions = conv.backbone_torsions(helix_atoms(20))
+        self.assertEqual(len(torsions), 20)
+        self.assertIsNone(torsions[0].phi)
+        self.assertIsNone(torsions[-1].psi)
+        for t in torsions[1:-1]:
+            self.assertEqual(conv.ramachandran_region(t.phi, t.psi), "alpha-R")
+            self.assertGreater(abs(t.omega), 160)
 
     def test_backbone_zmatrix_dihedrals_are_phi_psi_omega(self):
-        atoms = io.read_pdb(CRAMBIN, backbone_only=True)
+        atoms = helix_atoms(6)
         entries = conv.cartesian_to_zmatrix(atoms)
         torsions = conv.backbone_torsions(atoms)
         self.assertEqual([e.name for e in entries[:4]], ["N", "CA", "C", "O"])
@@ -81,12 +85,12 @@ class ProteinTests(unittest.TestCase):
             self.assertAlmostEqual(c.dihedral, torsions[r].phi, places=6)
             self.assertAlmostEqual(o.dihedral, torsions[r].o_dihedral, places=6)
 
-    def test_crambin_oxygen_lies_in_peptide_plane(self):
-        for t in conv.backbone_torsions(io.read_pdb(CRAMBIN)):
-            self.assertTrue(1.15 < t.o_bond < 1.3)
-            self.assertTrue(115 < t.o_angle < 125)
+    def test_built_oxygen_lies_in_peptide_plane(self):
+        for t in conv.backbone_torsions(helix_atoms(10)):
+            self.assertAlmostEqual(t.o_bond, conv.BOND_C_O, places=9)
+            self.assertAlmostEqual(t.o_angle, conv.ANGLE_CA_C_O, places=6)
             if t.psi is not None:
-                self.assertLess(abs(geo.angle_difference(t.o_dihedral, t.psi + 180.0)), 15)
+                self.assertLess(abs(geo.angle_difference(t.o_dihedral, t.psi + 180.0)), 1e-6)
 
     def test_build_backbone_reproduces_torsions_and_oxygen(self):
         rng = random.Random(7)
@@ -111,12 +115,11 @@ class ProteinTests(unittest.TestCase):
             self.assertAlmostEqual(geo.angle_difference(t.o_dihedral, want.o_dihedral), 0.0, places=6)
         self.assertLess(conv.backbone_torsion_error(atoms, residues), 1e-6)
 
-    def test_crambin_residues_rebuild_its_backbone(self):
-        atoms = [a for a in io.read_pdb(CRAMBIN, backbone_only=True) if a.res_seq <= 10]
+    def test_measured_residues_rebuild_the_same_backbone(self):
+        atoms = helix_atoms(10)
         rebuilt = conv.build_backbone(conv.backbone_torsions(atoms))
-        # Only the bond lengths and angles differ (ideal vs. crystal), so the shape is close.
         self.assertEqual([a.name for a in rebuilt], [a.name for a in atoms])
-        self.assertLess(conv.max_distance_deviation([a.xyz for a in atoms], [a.xyz for a in rebuilt]), 1.5)
+        self.assertLess(conv.max_distance_deviation([a.xyz for a in atoms], [a.xyz for a in rebuilt]), 1e-9)
 
     def test_oxygen_defaults_and_missing_values(self):
         residues = conv.complete_residues([
@@ -133,9 +136,7 @@ class ProteinTests(unittest.TestCase):
                                     conv.ResidueTorsions("ALA", 2, "A", -60.0, 120.0, None)])
 
     def test_ideal_helix_rise_per_residue(self):
-        phi, psi, omega = conv.SECONDARY_STRUCTURE_PRESETS["alpha-helix"]
-        n = 20
-        atoms = conv.build_backbone([conv.ResidueTorsions("ALA", i + 1, "A", phi, psi, omega) for i in range(n)])
+        atoms = helix_atoms(20)
         ca = [a.xyz for a in atoms if a.name == "CA"]
         # i -> i+3 CA distance in an alpha-helix is about 5.0-5.4 Angstrom.
         self.assertTrue(4.8 < geo.distance(ca[5], ca[8]) < 5.6)
@@ -161,12 +162,13 @@ class ParsingTests(unittest.TestCase):
             conv.validate_zmatrix([conv.ZEntry("N"), conv.ZEntry("CA", 0, -1.0)])
 
     def test_residue_table_round_trip(self):
-        atoms = io.read_pdb(CRAMBIN, backbone_only=True)
+        atoms = helix_atoms(8, "AGKV")
         self.assertEqual({a.name for a in atoms}, {"N", "CA", "C", "O"})
         torsions = conv.backbone_torsions(atoms)
         loaded = io.parse_residue_csv(io.residue_table_csv(torsions))
-        self.assertEqual(len(loaded), 46)
-        self.assertEqual((loaded[0].res_name, loaded[0].res_seq), ("THR", 1))
+        self.assertEqual(len(loaded), 8)
+        self.assertEqual((loaded[0].res_name, loaded[0].res_seq), ("ALA", 1))
+        self.assertEqual(loaded[1].res_name, "GLY")
         self.assertIsNone(loaded[0].phi)
         self.assertIsNone(loaded[-1].omega)
         for a, b in zip(torsions, loaded):
@@ -181,7 +183,7 @@ class ParsingTests(unittest.TestCase):
             io.parse_residue_csv("residue,phi,psi,omega\nALA1,-60,abc,180\n")
 
     def test_pdb_write_read(self):
-        atoms = io.read_pdb(CRAMBIN)
+        atoms = helix_atoms(6, "AGK")
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "out.pdb")
             io.write_pdb(atoms, path)

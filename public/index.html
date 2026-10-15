@@ -71,12 +71,11 @@
       <div id="sub-paste" role="tabpanel" aria-labelledby="tab-paste" hidden>
         <p class="hint">Paste a whole PDB file, or one atom per line as <code>NAME&nbsp;&nbsp;X&nbsp;&nbsp;Y&nbsp;&nbsp;Z</code>.</p>
         <div class="toolbar">
-          <button type="button" class="tool" data-example="protein" data-target="cartesian-text">Example: all of crambin</button>
           <label class="tool file-tool">Open a file…<input type="file" accept=".pdb,.ent,.txt,.xyz" data-target="cartesian-text"></label>
           <label class="check"><input type="checkbox" id="backbone-only"> Backbone atoms only (N, CA, C, O)</label>
         </div>
         <label class="visually-hidden" for="cartesian-text">Cartesian coordinates</label>
-        <textarea id="cartesian-text" spellcheck="false" rows="10" placeholder="ATOM      1  N   THR A   1      17.047  14.099   3.625  1.00 13.79           N"></textarea>
+        <textarea id="cartesian-text" spellcheck="false" rows="10" placeholder="N   0.000  0.000  0.000&#10;CA  1.458  0.000  0.000&#10;C   2.009  1.422  0.000&#10;O   1.356  2.294 -0.586"></textarea>
         <div class="actions">
           <button type="button" class="convert" data-convert="cartesian">Convert to internal coordinates</button>
           <span class="shortcut">or press Ctrl/⌘ + Enter</span>
@@ -100,7 +99,6 @@ Atom 3    NAME  bond  angle
 Atom 4+   NAME  bond  angle  dihedral</pre>
         <p class="hint">To choose reference atoms yourself, put the atom number before each value: <code>CB&nbsp;&nbsp;2 1.530&nbsp;&nbsp;1 110.5&nbsp;&nbsp;3 -122.6</code>. Lines starting with # are ignored.</p>
         <div class="toolbar">
-          <button type="button" class="tool" data-example="zmatrix" data-target="zmatrix-text">Example: crambin residues 1–4</button>
           <label class="tool file-tool">Open a .zmat file…<input type="file" accept=".zmat,.txt" data-target="zmatrix-text"></label>
         </div>
         <label class="visually-hidden" for="zmatrix-text">Z-matrix</label>
