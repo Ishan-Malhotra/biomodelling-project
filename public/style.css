@@ -434,7 +434,17 @@ table.data input[aria-invalid="true"] {
 table.residue-form th,
 table.residue-form td { padding: 0.3rem 0.4rem; }
 table.residue-form input { width: 100%; min-width: 4.75rem; text-align: right; }
-.residue-form th:nth-child(n+5) { color: var(--oxygen); }
+table.residue-form select {
+  width: 100%;
+  min-width: 4.5rem;
+  padding: 0.3rem 0.4rem;
+  font: inherit;
+  font-variation-settings: "wdth" 75;
+  color: var(--text);
+  background: var(--ink);
+  border: 1px solid var(--rule);
+}
+.residue-form th:nth-child(n+6):nth-child(-n+8) { color: var(--oxygen); }
 
 table.data th .col-kind,
 table.data th .col-name {
@@ -453,8 +463,8 @@ table.data th .col-kind {
 
 table.data th .col-name { font-weight: 600; }
 
-.residue-form th:nth-child(n+5) .col-kind { color: #c98a82; }
-.residue-form th:nth-child(n+5) .col-name { color: var(--oxygen); }
+.residue-form th:nth-child(n+6):nth-child(-n+8) .col-kind { color: #c98a82; }
+.residue-form th:nth-child(n+6):nth-child(-n+8) .col-name { color: var(--oxygen); }
 
 .atom-form td { padding-top: 0.3rem; padding-bottom: 0.3rem; }
 .atom-form .row-residue { color: var(--muted); }

@@ -16,11 +16,20 @@ const CSV_COLUMNS = {
   phi: "phi", psi: "psi", omega: "omega",
   o_bond: "c_o_bond", o_angle: "ca_c_o_angle", o_dihedral: "n_ca_c_o_dihedral",
 };
+const PRESET_TORSIONS = {
+  "alpha-helix": { phi: -57, psi: -47, omega: 180 },
+  "beta-strand": { phi: -139, psi: 135, omega: 180 },
+  "polyproline-II": { phi: -75, psi: 145, omega: 180 },
+  extended: { phi: 180, psi: 180, omega: 180 },
+};
 const THREE_TO_ONE = {
   ALA: "A", ARG: "R", ASN: "N", ASP: "D", CYS: "C", GLN: "Q", GLU: "E", GLY: "G", HIS: "H", ILE: "I",
   LEU: "L", LYS: "K", MET: "M", PHE: "F", PRO: "P", SER: "S", THR: "T", TRP: "W", TYR: "Y", VAL: "V",
 };
+const AMINO_ACIDS = Object.keys(THREE_TO_ONE);
 const ONE_TO_THREE = Object.fromEntries(Object.entries(THREE_TO_ONE).map(([three, one]) => [one, three]));
+const DEFAULT_RESIDUE_COUNT = 4;
+const MAX_RESIDUES = 500;
 
 const BACKBONE_CYCLE = ["N", "CA", "C", "O"];
 const DEFAULT_ATOMS = [...BACKBONE_CYCLE, ...BACKBONE_CYCLE];
@@ -351,56 +360,129 @@ async function loadFile(input) {
 // Per-residue table: phi, psi, omega and the carbonyl oxygen
 // ---------------------------------------------------------------------------
 
+function residueRows() {
+  return $$("#bb-table tbody tr");
+}
+
 function currentResidueValues() {
-  return $$("#bb-table tbody tr").map((row) => {
-    const values = {};
+  return residueRows().map((row) => {
+    const values = { name: row.querySelector("[data-field='name']").value };
     for (const input of row.querySelectorAll("input")) values[input.dataset.field] = input.value;
     return values;
   });
 }
 
-function backboneCount() {
-  const count = parseInt($("#bb-count").value, 10);
-  return Number.isFinite(count) ? Math.min(Math.max(count, 1), 500) : 1;
+function makeResidueSelect(selected = "ALA") {
+  const select = document.createElement("select");
+  select.dataset.field = "name";
+  for (const name of AMINO_ACIDS) {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name;
+    if (name === selected) option.selected = true;
+    select.appendChild(option);
+  }
+  return select;
 }
 
-function residueName(sequence, i) {
-  return ONE_TO_THREE[sequence[i]] || "ALA";
+function refreshResidueTable() {
+  const rows = residueRows();
+  const count = rows.length;
+  rows.forEach((row, i) => {
+    const name = row.querySelector("[data-field='name']").value;
+    row.querySelector(".row-number").textContent = String(i + 1);
+    row.querySelector("[data-field='name']").setAttribute("aria-label", `Residue ${i + 1} amino acid`);
+    for (const field of RESIDUE_FIELDS) {
+      const input = row.querySelector(`[data-field='${field}']`);
+      const unused = (field === "phi" && i === 0) || (field === "omega" && i === count - 1);
+      input.disabled = unused;
+      if (unused) input.value = "";
+      else if (input.value === "" && RESIDUE_DEFAULTS[field] !== "") input.value = RESIDUE_DEFAULTS[field];
+      input.setAttribute("aria-label", `Residue ${i + 1} (${name}) ${RESIDUE_LABELS[field]}`);
+    }
+    row.querySelector(".remove").setAttribute("aria-label", `Remove residue ${i + 1} (${name})`);
+    row.querySelector(".remove").disabled = count <= 1;
+  });
+}
+
+function addResidueRow(values = {}) {
+  if (residueRows().length >= MAX_RESIDUES) {
+    showError(`The web version handles up to ${MAX_RESIDUES} residues.`);
+    return null;
+  }
+  const tr = document.createElement("tr");
+  tr.appendChild(cell("", "num row-number"));
+
+  const nameCell = document.createElement("td");
+  const select = makeResidueSelect(AMINO_ACIDS.includes(values.name) ? values.name : "ALA");
+  select.addEventListener("change", () => {
+    $("#bb-preset").value = "custom";
+    refreshResidueTable();
+  });
+  nameCell.appendChild(select);
+  tr.appendChild(nameCell);
+
+  for (const field of RESIDUE_FIELDS) {
+    const td = document.createElement("td");
+    const input = document.createElement("input");
+    input.type = "number";
+    input.step = "any";
+    input.inputMode = "decimal";
+    input.dataset.field = field;
+    if (field === "o_dihedral") input.placeholder = "ψ+180";
+    const kept = values[field];
+    input.value = kept !== undefined && kept !== "" ? kept : RESIDUE_DEFAULTS[field];
+    input.addEventListener("input", () => { $("#bb-preset").value = "custom"; });
+    td.appendChild(input);
+    tr.appendChild(td);
+  }
+
+  const removeCell = document.createElement("td");
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "remove";
+  remove.textContent = "×";
+  remove.addEventListener("click", () => {
+    if (residueRows().length <= 1) return;
+    tr.remove();
+    $("#bb-preset").value = "custom";
+    refreshResidueTable();
+    hideError();
+  });
+  removeCell.appendChild(remove);
+  tr.appendChild(removeCell);
+
+  $("#bb-table tbody").appendChild(tr);
+  refreshResidueTable();
+  return tr;
 }
 
 function renderBackboneTable(previous = currentResidueValues()) {
-  const count = backboneCount();
-  const sequence = $("#bb-sequence").value.replace(/\s+/g, "").toUpperCase();
-  const tbody = $("#bb-table tbody");
-  tbody.replaceChildren();
-  for (let i = 0; i < count; i++) {
-    const tr = document.createElement("tr");
-    const name = residueName(sequence, i);
-    tr.appendChild(cell(`${name}${i + 1}`));
-    for (const field of RESIDUE_FIELDS) {
-      const td = document.createElement("td");
-      const input = document.createElement("input");
-      input.type = "number";
-      input.step = "any";
-      input.inputMode = "decimal";
-      input.dataset.field = field;
-      input.setAttribute("aria-label", `Residue ${i + 1} (${name}) ${RESIDUE_LABELS[field]}`);
-      const unused = (field === "phi" && i === 0) || (field === "omega" && i === count - 1);
-      input.disabled = unused;
-      if (field === "o_dihedral") input.placeholder = "ψ+180";
-      const kept = previous[i] && previous[i][field];
-      input.value = unused ? "" : (kept !== undefined && kept !== "" ? kept : RESIDUE_DEFAULTS[field]);
-      td.appendChild(input);
-      tr.appendChild(td);
-    }
-    tbody.appendChild(tr);
-  }
+  const rows = previous.length ? previous : Array.from({ length: DEFAULT_RESIDUE_COUNT }, () => ({ name: "ALA" }));
+  $("#bb-table tbody").replaceChildren();
+  for (const values of rows.slice(0, MAX_RESIDUES)) addResidueRow(values);
+}
+
+function applyPresetToTable(presetName) {
+  const torsions = PRESET_TORSIONS[presetName];
+  if (!torsions) return;
+  const previous = currentResidueValues().map((row) => ({
+    ...row,
+    phi: torsions.phi,
+    psi: torsions.psi,
+    omega: torsions.omega,
+    o_bond: RESIDUE_DEFAULTS.o_bond,
+    o_angle: RESIDUE_DEFAULTS.o_angle,
+    o_dihedral: "",
+  }));
+  renderBackboneTable(previous.length ? previous : Array.from({ length: DEFAULT_RESIDUE_COUNT }, () => ({
+    name: "ALA", ...torsions, o_bond: RESIDUE_DEFAULTS.o_bond, o_angle: RESIDUE_DEFAULTS.o_angle, o_dihedral: "",
+  })));
 }
 
 function syncBackboneForm() {
-  const custom = $("#bb-preset").value === "custom";
-  $("#bb-custom").hidden = !custom;
-  if (custom) renderBackboneTable();
+  const preset = $("#bb-preset").value;
+  if (preset !== "custom") applyPresetToTable(preset);
 }
 
 function parseResidueCsv(text) {
@@ -412,10 +494,11 @@ function parseResidueCsv(text) {
       "c_o_bond, ca_c_o_angle, n_ca_c_o_dihedral.");
   }
   if (!lines.length) throw new Error("The residue table has no rows.");
-  if (lines.length > 500) throw new Error("The web version handles up to 500 residues.");
+  if (lines.length > MAX_RESIDUES) throw new Error(`The web version handles up to ${MAX_RESIDUES} residues.`);
   return lines.map((line) => {
     const cells = line.split(",").map((c) => c.trim());
-    const values = { name: (cells[column("residue")].match(/^[A-Za-z]+/) || ["ALA"])[0].toUpperCase() };
+    const rawName = (cells[column("residue")].match(/^[A-Za-z]+/) || ["ALA"])[0].toUpperCase();
+    const values = { name: AMINO_ACIDS.includes(rawName) ? rawName : "ALA" };
     for (const field of RESIDUE_FIELDS) {
       const index = column(CSV_COLUMNS[field]);
       values[field] = index < 0 || cells[index] === undefined || cells[index] === "-" ? "" : cells[index];
@@ -425,10 +508,7 @@ function parseResidueCsv(text) {
 }
 
 function fillResidueTable(rows) {
-  $("#bb-count").value = String(rows.length);
-  $("#bb-sequence").value = rows.map((row) => THREE_TO_ONE[row.name] || "A").join("");
   $("#bb-preset").value = "custom";
-  $("#bb-custom").hidden = false;
   renderBackboneTable(rows);
   $("#results").hidden = true;
 }
@@ -448,7 +528,7 @@ async function loadResidueFile(input) {
 
 function residueRequestBody() {
   return currentResidueValues().map((values, i) => {
-    const residue = {};
+    const residue = { res_name: values.name };
     for (const field of RESIDUE_FIELDS) {
       const raw = values[field];
       if (raw !== undefined && raw !== "" && Number.isNaN(Number(raw))) {
@@ -484,7 +564,12 @@ async function convert(kind) {
       if (!text.trim()) throw new Error("Enter a Z-matrix first, or open a .zmat file.");
       renderResults("to-cartesian", await api("/api/internal-to-cartesian", { text }));
     } else {
-      const body = { count: backboneCount(), sequence: $("#bb-sequence").value };
+      const rows = currentResidueValues();
+      if (!rows.length) throw new Error("Add at least one residue.");
+      const body = {
+        count: rows.length,
+        sequence: rows.map((row) => THREE_TO_ONE[row.name] || "A").join(""),
+      };
       if ($("#bb-preset").value === "custom") {
         body.residues = residueRequestBody();
       } else {
@@ -762,10 +847,27 @@ function init() {
   }
 
   $("#bb-preset").addEventListener("change", syncBackboneForm);
-  $("#bb-count").addEventListener("change", () => { if (!$("#bb-custom").hidden) renderBackboneTable(); });
-  $("#bb-sequence").addEventListener("input", () => { if (!$("#bb-custom").hidden) renderBackboneTable(); });
   $("#bb-file").addEventListener("change", () => loadResidueFile($("#bb-file")));
-  $("#bb-reset").addEventListener("click", () => renderBackboneTable([]));
+  $("#bb-reset").addEventListener("click", () => {
+    $("#bb-preset").value = "alpha-helix";
+    applyPresetToTable("alpha-helix");
+    hideError();
+  });
+  $("#bb-add-residue").addEventListener("click", () => {
+    const last = currentResidueValues().slice(-1)[0];
+    const row = addResidueRow({
+      name: last ? last.name : "ALA",
+      phi: RESIDUE_DEFAULTS.phi,
+      psi: RESIDUE_DEFAULTS.psi,
+      omega: RESIDUE_DEFAULTS.omega,
+      o_bond: RESIDUE_DEFAULTS.o_bond,
+      o_angle: RESIDUE_DEFAULTS.o_angle,
+      o_dihedral: "",
+    });
+    $("#bb-preset").value = "custom";
+    if (row) row.querySelector("[data-field='name']").focus();
+    hideError();
+  });
   renderBackboneTable([]);
 
   setupViewer();
