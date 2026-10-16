@@ -95,9 +95,9 @@
 Atom 2    NAME  bond
 Atom 3    NAME  bond  angle
 Atom 4+   NAME  bond  angle  dihedral</pre>
-        <p class="hint">To choose reference atoms yourself, put the atom number before each value: <code>CB&nbsp;&nbsp;2 1.530&nbsp;&nbsp;1 110.5&nbsp;&nbsp;3 -122.6</code>. Lines starting with # are ignored.</p>
+        <p class="hint">To choose reference atoms yourself, put the atom number before each value: <code>CB&nbsp;&nbsp;2 1.530&nbsp;&nbsp;1 110.5&nbsp;&nbsp;3 -122.6</code>. An AMBER internal-coordinate file (.in) is accepted too. Lines starting with # are ignored.</p>
         <div class="toolbar">
-          <label class="tool file-tool">Open a .zmat file…<input type="file" accept=".zmat,.txt" data-target="zmatrix-text"></label>
+          <label class="tool file-tool">Open a .zmat or .in file…<input type="file" accept=".zmat,.txt,.in" data-target="zmatrix-text"></label>
         </div>
         <label class="visually-hidden" for="zmatrix-text">Z-matrix</label>
         <textarea id="zmatrix-text" spellcheck="false" rows="10" placeholder="N&#10;CA  1.458&#10;C   1.525  111.2&#10;N   1.329  116.2  -47"></textarea>
@@ -165,6 +165,6 @@ Atom 4+   NAME  bond  angle  dihedral</pre>
     </section>
   </main>
 
-  <script src="/app.js?v=8"></script>
+  <script src="/app.js?v=9"></script>
 </body>
 </html>

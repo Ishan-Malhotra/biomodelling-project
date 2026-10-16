@@ -629,7 +629,7 @@ async function convert(kind) {
       renderResults("to-internal", data);
     } else if (kind === "zmatrix") {
       const text = $("#zmatrix-text").value;
-      if (!text.trim()) throw new Error("Enter a Z-matrix first, or open a .zmat file.");
+      if (!text.trim()) throw new Error("Enter a Z-matrix first, or open a .zmat or .in file.");
       renderResults("to-cartesian", await api("/api/internal-to-cartesian", { text }));
     } else {
       if (!currentResidueValues().length) throw new Error("Add at least one residue.");

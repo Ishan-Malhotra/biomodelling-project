@@ -501,7 +501,7 @@ def type_zmatrix():
 
 def load_zmatrix():
     banner("Internal → Cartesian: load a Z-matrix file")
-    print("  Type the path to a .zmat file, or drag the file into this window.")
+    print("  Type the path to a .zmat or AMBER .in file, or drag the file into this window.")
     print(muted("  Files saved from the Cartesian → Internal screen can be loaded here.\n"))
     raw = ask("Z-matrix file (Enter to go back):")
     if not raw:
@@ -515,7 +515,7 @@ def zmatrix_flow():
         print("  How would you like to enter the internal coordinates?\n")
         options = [
             ("1", "Type them in", "one atom per line:  NAME  bond  angle  dihedral"),
-            ("2", "Load a Z-matrix file (.zmat)", "files saved from Cartesian → Internal"),
+            ("2", "Load a Z-matrix file (.zmat or .in)", "saved .zmat files, or an AMBER internal-coordinate file"),
             ("B", "Back"),
         ]
         menu(options)
@@ -789,8 +789,8 @@ HELP_TEXT = """\
 
   TIPS
     Type 'q' at any prompt to quit. Saved residue tables (.csv) and
-    Z-matrix files (.zmat) can be loaded back on the Internal → Cartesian
-    screen.
+    Z-matrix files (.zmat) and AMBER internal-coordinate files (.in) can be
+    loaded back on the Internal → Cartesian screen.
 """
 
 

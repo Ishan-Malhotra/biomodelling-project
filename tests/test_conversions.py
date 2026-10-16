@@ -291,5 +291,50 @@ class CorrectnessTests(unittest.TestCase):
         self.assertLess(conv.require_torsion_match(atoms, conv.backbone_torsions(atoms)), 1e-6)
 
 
+INPUTS = os.path.join(os.path.dirname(__file__), "..", "inputs")
+
+
+class ProfessorInputTests(unittest.TestCase):
+    def test_peptide_pdb_converts(self):
+        atoms = io.read_pdb(os.path.join(INPUTS, "cartesiona_coordinate_Peptide.pdb"))
+        self.assertEqual(len(atoms), 71)
+        self.assertEqual([(a.res_name, a.res_seq) for a in atoms if a.name == "CA"],
+                         [("LEU", 1), ("ALA", 2), ("SER", 3), ("ALA", 4), ("ILE", 5)])
+        torsions = conv.backbone_torsions(atoms)
+        self.assertIsNone(torsions[0].phi)
+        self.assertIsNone(torsions[-1].psi)
+        self.assertIsNone(torsions[-1].omega)
+        entries = conv.cartesian_to_zmatrix(atoms)
+        rebuilt = conv.zmatrix_to_cartesian(entries)
+        self.assertLess(conv.require_distance_match([a.xyz for a in atoms], rebuilt), 1e-9)
+        bond, angle, dihedral = conv.require_internal_match(entries, [a.xyz for a in atoms])
+        self.assertLess(max(bond, angle, dihedral), 1e-9)
+
+    def test_amber_internal_file_builds(self):
+        entries = io.read_zmatrix(os.path.join(INPUTS, "internal_coordinate.in"))
+        self.assertEqual(len(entries), 26)
+        self.assertEqual(entries[0].name, "DUMM")
+        self.assertIsNone(entries[0].bond)
+        self.assertEqual(entries[3].name, "N")
+        self.assertEqual((entries[3].bond_ref, entries[3].angle_ref, entries[3].dihedral_ref), (2, 1, 0))
+        self.assertAlmostEqual(entries[3].bond, 1.335)
+        self.assertAlmostEqual(entries[3].dihedral, 180.0)
+        # A side-chain dihedral written as 300 degrees is kept, not folded on read.
+        self.assertAlmostEqual(entries[6].dihedral, 300.0)
+        coords = conv.zmatrix_to_cartesian(entries)
+        bond, angle, dihedral = conv.require_internal_match(entries, coords)
+        self.assertLess(max(bond, angle, dihedral), 1e-9)
+
+    def test_amber_third_atom_must_lie_in_the_xy_plane(self):
+        text = "\n".join([
+            "1  DUMM  DU  M  0  -1  -2  0.000  0.000  0.000  0.00000",
+            "2  DUMM  DU  M  1   0  -1  1.449  0.000  0.000  0.00000",
+            "3  DUMM  DU  M  2   1   0  1.522  111.100  90.000  0.00000",
+        ])
+        with self.assertRaises(ValueError) as caught:
+            io.parse_zmatrix_text(text)
+        self.assertIn("xy-plane", str(caught.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

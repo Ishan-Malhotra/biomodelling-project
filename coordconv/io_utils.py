@@ -89,6 +89,82 @@ def parse_zmatrix_line(line: str, i: int) -> ZEntry:
     return ZEntry(name, refs[0], values[0], refs[1], values[1], refs[2], values[2])
 
 
+def _int_token(token: str, what: str) -> int:
+    try:
+        return int(token)
+    except ValueError:
+        raise ValueError("'{}' is not a valid {}".format(token, what)) from None
+
+
+def looks_like_amber_internal(line: str) -> bool:
+    """True for one row of an AMBER internal-coordinate file.
+
+    The columns are: atom number, name, type, tree symbol, the three reference
+    atom numbers, bond, angle, dihedral and partial charge.
+    """
+    tokens = _tokens(line)
+    if len(tokens) != 11:
+        return False
+    try:
+        int(tokens[0])
+        int(tokens[4])
+        int(tokens[5])
+        int(tokens[6])
+        float(tokens[7])
+        float(tokens[8])
+        float(tokens[9])
+        float(tokens[10])
+    except ValueError:
+        return False
+    return True
+
+
+def _angle_near_zero(angle: float) -> bool:
+    folded = (angle + 180.0) % 360.0 - 180.0
+    return abs(folded) <= 1e-4
+
+
+def parse_amber_internal_line(line: str, i: int) -> ZEntry:
+    """Parse one AMBER internal-coordinate row into a Z-matrix entry.
+
+    Atom type, tree symbol and charge are ignored. Reference numbers are
+    1-based. The first three rows are usually DUMM atoms; their zero and
+    negative reference numbers are the AMBER coordinate frame and are not
+    stored. The third atom is placed in the xy-plane, so its dihedral must be 0.
+    """
+    tokens = _tokens(line)
+    if len(tokens) != 11:
+        raise ValueError(
+            "expected an AMBER internal-coordinate row: number, name, type, tree, "
+            "three reference atoms, bond, angle, dihedral, charge")
+    index = _int_token(tokens[0], "atom number")
+    if index != i + 1:
+        raise ValueError("this row is numbered {} but it is atom {} in the file; "
+                         "atoms must be listed in order".format(index, i + 1))
+    name = tokens[1]
+    na, nb, nc = (_int_token(tokens[k], "reference atom") for k in (4, 5, 6))
+    bond = _float(tokens[7], "bond")
+    angle = _float(tokens[8], "angle")
+    dihedral = _float(tokens[9], "dihedral")
+    if i == 2 and not _angle_near_zero(dihedral):
+        raise ValueError("atom 3 ({}) has dihedral {}, but the third atom is placed "
+                         "in the xy-plane, so that dihedral must be 0".format(name, dihedral))
+    raw_refs = (na, nb, nc)
+    raw_values = (bond, angle, dihedral)
+    kinds = ("bond", "angle", "dihedral")
+    refs, values = [], []
+    for kind, ref, value in zip(kinds, raw_refs, raw_values):
+        if len(refs) >= min(i, 3):
+            break
+        if ref <= 0:
+            raise ValueError("atom {} ({}) is missing its {} reference".format(i + 1, name, kind))
+        refs.append(ref - 1)
+        values.append(value)
+    refs += [None] * (3 - len(refs))
+    values += [None] * (3 - len(values))
+    return ZEntry(name, refs[0], values[0], refs[1], values[1], refs[2], values[2])
+
+
 def assign_residues(atoms: List[Atom]) -> List[Atom]:
     """Number residues for atoms without residue info: a new residue starts at each N."""
     res_seq = 0
@@ -228,17 +304,25 @@ def format_zmatrix_line(entry: ZEntry) -> str:
 
 
 def parse_zmatrix_text(text: str) -> List[ZEntry]:
-    entries = []
+    """Read a Z-matrix, either this tool's layout or an AMBER internal-coordinate file."""
+    rows = []
     for line_no, line in enumerate(text.splitlines(), start=1):
         content = line.split("#", 1)[0].strip()
-        if not content:
-            continue
+        if content:
+            rows.append((line_no, content))
+    if not rows:
+        raise ValueError("no Z-matrix rows found")
+    amber = looks_like_amber_internal(rows[0][1])
+    entries = []
+    for line_no, content in rows:
         try:
-            entries.append(parse_zmatrix_line(content, len(entries)))
+            if amber:
+                entry = parse_amber_internal_line(content, len(entries))
+            else:
+                entry = parse_zmatrix_line(content, len(entries))
+            entries.append(entry)
         except ValueError as exc:
             raise ValueError("line {}: {}".format(line_no, exc)) from None
-    if not entries:
-        raise ValueError("no Z-matrix rows found")
     return entries
 
 

@@ -1,3 +1,4 @@
+import os
 import unittest
 
 try:
@@ -90,6 +91,23 @@ class WebApiTests(unittest.TestCase):
         refused = self.client.post("/api/backbone-to-cartesian", json={"residues": residues})
         self.assertEqual(refused.status_code, 400)
         self.assertIn("chain", refused.json()["detail"])
+
+    def test_professor_input_files(self):
+        root = os.path.join(os.path.dirname(__file__), "..", "inputs")
+        with open(os.path.join(root, "cartesiona_coordinate_Peptide.pdb")) as fh:
+            pdb = fh.read()
+        peptide = self.client.post("/api/cartesian-to-internal", json={"text": pdb}).json()
+        self.assertEqual(len(peptide["atoms"]), 71)
+        self.assertEqual([t["residue"] for t in peptide["torsions"]],
+                         ["LEU1", "ALA2", "SER3", "ALA4", "ILE5"])
+        self.assertLess(peptide["check"]["max_deviation"], 1e-9)
+
+        with open(os.path.join(root, "internal_coordinate.in")) as fh:
+            amber = fh.read()
+        built = self.client.post("/api/internal-to-cartesian", json={"text": amber}).json()
+        self.assertEqual(len(built["atoms"]), 26)
+        self.assertEqual(built["atoms"][3]["name"], "N")
+        self.assertLess(built["check"]["dihedral"], 1e-6)
 
 
 if __name__ == "__main__":
