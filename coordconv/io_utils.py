@@ -120,12 +120,14 @@ def looks_like_pdb(text: str) -> bool:
 def parse_pdb_text(text: str, backbone_only: bool = False) -> List[Atom]:
     """Read ATOM records from the first model of PDB-formatted text."""
     atoms = []
+    saw_atom = False
     for line in text.splitlines():
         record = line[:6].strip()
         if record == "ENDMDL" and atoms:
             break
         if record != "ATOM":
             continue
+        saw_atom = True
         if line[16:17] not in (" ", "A", ""):
             continue
         name = line[12:16].strip()
@@ -138,10 +140,13 @@ def parse_pdb_text(text: str, backbone_only: bool = False) -> List[Atom]:
                 res_name=line[17:20].strip() or "UNK",
                 res_seq=int(line[22:26]),
                 chain=line[21:22].strip() or "A",
+                icode=line[26:27].strip(),
             ))
         except ValueError:
             raise ValueError("could not read this PDB line: {}".format(line.rstrip())) from None
     if not atoms:
+        if backbone_only and saw_atom:
+            raise ValueError("no backbone atoms (N, CA, C, O) found")
         raise ValueError("no ATOM records found")
     return atoms
 
@@ -184,11 +189,18 @@ def pdb_text(atoms: Sequence[Atom], title: Optional[str] = None) -> str:
     if title:
         lines.append("REMARK   1 {}".format(title[:68]))
     for serial, atom in enumerate(atoms, start=1):
+        if not -999 <= atom.res_seq <= 9999:
+            raise ValueError(
+                "residue number {} does not fit in a PDB record (must be from -999 to 9999)".format(atom.res_seq))
+        icode = (atom.icode or " ")[:1]
+        if icode.strip() and not icode.isalpha():
+            raise ValueError("insertion code {!r} must be a single letter".format(atom.icode))
         x, y, z = atom.xyz
+        # Column 27 is the insertion code. Coordinates stay in columns 31-54.
         lines.append(
-            "ATOM  {:5d} {:4s} {:>3s} {:1s}{:4d}    {:8.3f}{:8.3f}{:8.3f}{:6.2f}{:6.2f}          {:>2s}".format(
-                serial, _pdb_atom_name(atom.name), atom.res_name[:3], atom.chain[:1],
-                atom.res_seq, x, y, z, 1.0, 0.0, _element(atom.name),
+            "ATOM  {:5d} {:4s} {:>3s} {:1s}{:4d}{:1s}   {:8.3f}{:8.3f}{:8.3f}{:6.2f}{:6.2f}          {:>2s}".format(
+                serial, _pdb_atom_name(atom.name), atom.res_name[:3], (atom.chain or "A")[:1],
+                atom.res_seq, icode, x, y, z, 1.0, 0.0, _element(atom.name),
             )
         )
     lines.append("END")
@@ -251,7 +263,13 @@ def write_zmatrix(entries: Sequence[ZEntry], path: str, title: Optional[str] = N
 # Residue tables (phi, psi, omega and carbonyl oxygen per residue)
 # ---------------------------------------------------------------------------
 
-RESIDUE_COLUMNS = ("residue", "phi", "psi", "omega", "c_o_bond", "ca_c_o_angle", "n_ca_c_o_dihedral")
+RESIDUE_COLUMNS = ("residue", "chain", "phi", "psi", "omega", "c_o_bond", "ca_c_o_angle", "n_ca_c_o_dihedral")
+REQUIRED_RESIDUE_COLUMNS = ("residue", "phi", "psi", "omega")
+
+
+def residue_id(res_name: str, res_seq: int, icode: str = "") -> str:
+    """Residue label such as ALA12 or ALA27A. The letter after the number is the insertion code."""
+    return "{}{}{}".format(res_name, res_seq, icode or "")
 
 
 def _cell(value: Optional[float], digits: int) -> str:
@@ -265,7 +283,8 @@ def residue_table_csv(residues: Sequence[ResidueTorsions]) -> str:
     writer.writerow(RESIDUE_COLUMNS)
     for r in residues:
         writer.writerow([
-            "{}{}".format(r.res_name, r.res_seq),
+            residue_id(r.res_name, r.res_seq, r.icode),
+            r.chain or "A",
             _cell(r.phi, 2), _cell(r.psi, 2), _cell(r.omega, 2),
             _cell(r.o_bond, 3), _cell(r.o_angle, 2), _cell(r.o_dihedral, 2),
         ])
@@ -273,10 +292,11 @@ def residue_table_csv(residues: Sequence[ResidueTorsions]) -> str:
 
 
 def parse_residue_csv(text: str) -> List[ResidueTorsions]:
+    text = text.lstrip("\ufeff")
     lines = [line for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")]
     reader = csv.DictReader(lines)
     fields = [f.strip().lower() for f in (reader.fieldnames or [])]
-    missing = [c for c in ("residue", "phi", "psi", "omega") if c not in fields]
+    missing = [c for c in REQUIRED_RESIDUE_COLUMNS if c not in fields]
     if missing:
         raise ValueError("the residue table needs the columns: {}".format(", ".join(RESIDUE_COLUMNS)))
 
@@ -289,19 +309,21 @@ def parse_residue_csv(text: str) -> List[ResidueTorsions]:
     residues = []
     for row_no, raw_row in enumerate(reader, start=1):
         row = {k.strip().lower(): v for k, v in raw_row.items() if k}
-        match = re.match(r"^\s*([A-Za-z]+)\s*(-?\d+)?\s*$", row.get("residue") or "")
+        match = re.match(r"^\s*([A-Za-z]+)\s*(-?\d+)?\s*([A-Za-z])?\s*$", row.get("residue") or "")
         if not match:
-            raise ValueError("row {}: residue should look like ALA1".format(row_no))
+            raise ValueError("row {}: residue should look like ALA1 or ALA27A".format(row_no))
+        chain = (row.get("chain") or "A").strip()[:1] or "A"
         residues.append(ResidueTorsions(
             res_name=match.group(1).upper()[:3],
             res_seq=int(match.group(2)) if match.group(2) else row_no,
-            chain="A",
+            chain=chain,
             phi=number(row, "phi", row_no),
             psi=number(row, "psi", row_no),
             omega=number(row, "omega", row_no),
             o_bond=number(row, "c_o_bond", row_no),
             o_angle=number(row, "ca_c_o_angle", row_no),
             o_dihedral=number(row, "n_ca_c_o_dihedral", row_no),
+            icode=(match.group(3) or "").upper(),
         ))
     if not residues:
         raise ValueError("the residue table has no rows")

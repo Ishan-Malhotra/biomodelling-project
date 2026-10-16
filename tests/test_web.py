@@ -82,6 +82,15 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual([a["residue"] for a in data["atoms"][::4]], ["ALA1", "GLY2", "LYS3", "VAL4"])
         self.assertLess(data["check"]["max_error"], 1e-6)
 
+    def test_separate_chains_are_refused(self):
+        residues = [
+            {"res_name": "ALA", "chain": "A", "phi": None, "psi": -47, "omega": 180},
+            {"res_name": "ALA", "chain": "B", "phi": -57, "psi": -47, "omega": None},
+        ]
+        refused = self.client.post("/api/backbone-to-cartesian", json={"residues": residues})
+        self.assertEqual(refused.status_code, 400)
+        self.assertIn("chain", refused.json()["detail"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -193,5 +193,103 @@ class ParsingTests(unittest.TestCase):
             self.assertTrue(all(math.isclose(p, q, abs_tol=1e-3) for p, q in zip(a.xyz, b.xyz)))
 
 
+class CorrectnessTests(unittest.TestCase):
+    def test_equivalent_angles_share_a_ramachandran_region(self):
+        self.assertEqual(conv.ramachandran_region(180, 180), "beta")
+        self.assertEqual(conv.ramachandran_region(180, 180), conv.ramachandran_region(-180, -180))
+        phi, psi, omega = conv.SECONDARY_STRUCTURE_PRESETS["extended"]
+        atoms = conv.build_backbone(
+            [conv.ResidueTorsions("ALA", i + 1, "A", phi, psi, omega) for i in range(4)])
+        for torsion in conv.backbone_torsions(atoms)[1:-1]:
+            self.assertEqual(conv.ramachandran_region(torsion.phi, torsion.psi), "beta")
+
+    def test_collinear_dihedral_is_not_reported_as_zero(self):
+        with self.assertRaises(ValueError):
+            geo.dihedral((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 0.0), (3.0, 1.0, 0.0))
+
+    def test_insertion_codes_stay_separate_residues(self):
+        atoms = helix_atoms(2)
+        for atom in atoms:
+            if atom.res_seq == 2:
+                atom.res_seq = 1
+                atom.icode = "A"
+        parsed = io.parse_pdb_text(io.pdb_text(atoms))
+        torsions = conv.backbone_torsions(parsed)
+        self.assertEqual([(t.res_seq, t.icode) for t in torsions], [(1, ""), (1, "A")])
+        self.assertAlmostEqual(torsions[0].psi, -47.0, delta=1.0)
+        self.assertAlmostEqual(torsions[1].phi, -57.0, delta=1.0)
+
+    def test_pdb_insertion_code_does_not_shift_coordinates(self):
+        atoms = helix_atoms(1)
+        atoms[0].icode = "A"
+        line = io.pdb_text(atoms).splitlines()[0]
+        self.assertEqual(line[26], "A")
+        again = io.parse_pdb_text(io.pdb_text(atoms))
+        self.assertEqual(again[0].icode, "A")
+        for original, loaded in zip(atoms, again):
+            self.assertTrue(all(math.isclose(p, q, abs_tol=1e-3) for p, q in zip(original.xyz, loaded.xyz)))
+
+    def test_chain_break_and_second_chain_are_not_joined(self):
+        first = helix_atoms(2)
+        second = [
+            conv.Atom(atom.name, (atom.xyz[0] + 30.0, atom.xyz[1], atom.xyz[2]), atom.res_name, atom.res_seq + 2, "A")
+            for atom in helix_atoms(2)]
+        torsions = conv.backbone_torsions(first + second)
+        self.assertEqual(len(torsions), 4)
+        self.assertIsNone(torsions[1].psi)
+        self.assertIsNone(torsions[2].phi)
+        with self.assertRaises(ValueError):
+            conv.build_backbone(torsions)
+
+        other_chain = [conv.ResidueTorsions("ALA", i + 1, "B", -57.0, -47.0, 180.0) for i in range(2)]
+        with self.assertRaises(ValueError) as caught:
+            conv.build_backbone(helix_residues(2) + other_chain)
+        self.assertIn("chain", str(caught.exception))
+
+    def test_residue_table_keeps_chain_insertion_and_blank_angles(self):
+        residues = conv.backbone_torsions(helix_atoms(3))
+        residues[1].icode = "A"
+        residues[2].chain = "B"
+        text = "\ufeff" + io.residue_table_csv(residues)
+        loaded = io.parse_residue_csv(text)
+        self.assertEqual([(r.chain, r.res_seq, r.icode) for r in loaded],
+                         [("A", 1, ""), ("A", 2, "A"), ("B", 3, "")])
+        self.assertIsNone(loaded[0].phi)
+        self.assertIsNone(loaded[-1].psi)
+        self.assertIsNone(loaded[-1].omega)
+        quoted = '"residue","chain","phi","psi","omega"\n"ALA27A","A","-57","-47","180"\n"GLY28","B","-60","140","180"\n'
+        parsed = io.parse_residue_csv(quoted)
+        self.assertEqual((parsed[0].res_name, parsed[0].res_seq, parsed[0].icode, parsed[0].chain), ("ALA", 27, "A", "A"))
+        self.assertEqual(parsed[1].chain, "B")
+
+    def test_backbone_only_filter_names_the_real_problem(self):
+        text = "ATOM      1  CB  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\n"
+        with self.assertRaises(ValueError) as caught:
+            io.parse_pdb_text(text, backbone_only=True)
+        self.assertIn("backbone", str(caught.exception))
+
+    def test_a_sign_flip_is_refused(self):
+        import dataclasses
+
+        entries = conv.cartesian_to_zmatrix(helix_atoms(4))
+        flipped = [
+            dataclasses.replace(entry, dihedral=None if entry.dihedral is None else -entry.dihedral)
+            for entry in entries
+        ]
+        mirrored = conv.zmatrix_to_cartesian(flipped)
+        with self.assertRaises(ValueError):
+            conv.require_internal_match(entries, mirrored)
+
+    def test_a_bad_rebuild_is_refused(self):
+        with self.assertRaises(ValueError):
+            conv.require_distance_match([(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)],
+                                        [(0.0, 0.0, 0.0), (3.0, 0.0, 0.0)])
+        atoms = helix_atoms(8)
+        entries = conv.cartesian_to_zmatrix(atoms)
+        rebuilt = conv.zmatrix_to_cartesian(entries)
+        self.assertLess(conv.require_distance_match([a.xyz for a in atoms], rebuilt), 1e-9)
+        self.assertLess(conv.require_torsion_match(atoms, conv.backbone_torsions(atoms)), 1e-6)
+
+
 if __name__ == "__main__":
     unittest.main()

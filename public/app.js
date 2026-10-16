@@ -366,7 +366,13 @@ function residueRows() {
 
 function currentResidueValues() {
   return residueRows().map((row) => {
-    const values = { name: row.querySelector("[data-field='name']").value };
+    const values = {
+      name: row.querySelector("[data-field='name']").value,
+      chain: row.dataset.chain || "A",
+      icode: row.dataset.icode || "",
+      resSeq: row.dataset.resSeq || "",
+      keepBlanks: row.dataset.keepBlanks === "1",
+    };
     for (const input of row.querySelectorAll("input")) values[input.dataset.field] = input.value;
     return values;
   });
@@ -375,7 +381,8 @@ function currentResidueValues() {
 function makeResidueSelect(selected = "ALA") {
   const select = document.createElement("select");
   select.dataset.field = "name";
-  for (const name of AMINO_ACIDS) {
+  const names = AMINO_ACIDS.includes(selected) ? AMINO_ACIDS : [selected, ...AMINO_ACIDS];
+  for (const name of names) {
     const option = document.createElement("option");
     option.value = name;
     option.textContent = name;
@@ -395,9 +402,25 @@ function refreshResidueTable() {
     for (const field of RESIDUE_FIELDS) {
       const input = row.querySelector(`[data-field='${field}']`);
       const unused = (field === "phi" && i === 0) || (field === "omega" && i === count - 1);
-      input.disabled = unused;
-      if (unused) input.value = "";
-      else if (input.value === "" && RESIDUE_DEFAULTS[field] !== "") input.value = RESIDUE_DEFAULTS[field];
+      // A blank loaded from a file must stay blank. Only an angle that is blank because
+      // the residue used to be a chain end gets the default when that end moves.
+      if (unused) {
+        if (input.dataset.unused !== "1") {
+          input.dataset.saved = input.value;
+          input.dataset.unused = "1";
+        }
+        input.disabled = true;
+        input.value = "";
+      } else {
+        input.disabled = false;
+        if (input.dataset.unused === "1") {
+          const saved = input.dataset.saved;
+          const fallback = RESIDUE_DEFAULTS[field] === "" ? "" : String(RESIDUE_DEFAULTS[field]);
+          input.value = saved ? saved : fallback;
+          input.dataset.unused = "";
+          delete input.dataset.saved;
+        }
+      }
       input.setAttribute("aria-label", `Residue ${i + 1} (${name}) ${RESIDUE_LABELS[field]}`);
     }
     row.querySelector(".remove").setAttribute("aria-label", `Remove residue ${i + 1} (${name})`);
@@ -411,6 +434,10 @@ function addResidueRow(values = {}) {
     return null;
   }
   const tr = document.createElement("tr");
+  tr.dataset.chain = values.chain || "A";
+  tr.dataset.icode = values.icode || "";
+  if (values.resSeq) tr.dataset.resSeq = String(values.resSeq);
+  if (values.keepBlanks) tr.dataset.keepBlanks = "1";
   tr.appendChild(cell("", "num row-number"));
 
   const nameCell = document.createElement("td");
@@ -428,7 +455,8 @@ function addResidueRow(values = {}) {
     input.dataset.field = field;
     if (field === "o_dihedral") input.placeholder = "ψ+180";
     const kept = values[field];
-    input.value = kept !== undefined && kept !== "" ? kept : RESIDUE_DEFAULTS[field];
+    if (values.keepBlanks && (kept === undefined || kept === "")) input.value = "";
+    else input.value = kept !== undefined && kept !== "" ? kept : RESIDUE_DEFAULTS[field];
     td.appendChild(input);
     tr.appendChild(td);
   }
@@ -475,23 +503,69 @@ function applyPresetToTable(presetName) {
   })));
 }
 
+function parseCsv(text) {
+  const src = text.replace(/^\uFEFF/, "");
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let quoted = false;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (quoted) {
+      if (ch === '"') {
+        if (src[i + 1] === '"') { cell += '"'; i += 1; }
+        else quoted = false;
+      } else cell += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ",") { row.push(cell); cell = ""; }
+    else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && src[i + 1] === "\n") i += 1;
+      row.push(cell);
+      cell = "";
+      if (row.some((value) => value.trim())) rows.push(row.map((value) => value.trim()));
+      row = [];
+    } else cell += ch;
+  }
+  if (cell.length || row.length) {
+    row.push(cell);
+    if (row.some((value) => value.trim())) rows.push(row.map((value) => value.trim()));
+  }
+  return rows.filter((cells) => cells[0] && !cells[0].startsWith("#"));
+}
+
+function parseResidueToken(token) {
+  const match = /^\s*([A-Za-z]+)\s*(-?\d+)?\s*([A-Za-z])?\s*$/.exec(token || "");
+  if (!match) throw new Error(`Residue should look like ALA1 or ALA27A, not "${token}".`);
+  return {
+    name: match[1].toUpperCase().slice(0, 3),
+    resSeq: match[2] || "",
+    icode: (match[3] || "").toUpperCase(),
+  };
+}
+
 function parseResidueCsv(text) {
-  const lines = text.split(/\r?\n/).filter((line) => line.trim() && !line.trim().startsWith("#"));
-  const header = (lines.shift() || "").split(",").map((h) => h.trim().toLowerCase());
+  const rows = parseCsv(text);
+  const header = (rows.shift() || []).map((h) => h.toLowerCase());
   const column = (name) => header.indexOf(name);
   if (column("residue") < 0 || column("phi") < 0 || column("psi") < 0 || column("omega") < 0) {
-    throw new Error("The residue table needs the columns: residue, phi, psi, omega, " +
+    throw new Error("The residue table needs the columns: residue, chain, phi, psi, omega, " +
       "c_o_bond, ca_c_o_angle, n_ca_c_o_dihedral.");
   }
-  if (!lines.length) throw new Error("The residue table has no rows.");
-  if (lines.length > MAX_RESIDUES) throw new Error(`The web version handles up to ${MAX_RESIDUES} residues.`);
-  return lines.map((line) => {
-    const cells = line.split(",").map((c) => c.trim());
-    const rawName = (cells[column("residue")].match(/^[A-Za-z]+/) || ["ALA"])[0].toUpperCase();
-    const values = { name: AMINO_ACIDS.includes(rawName) ? rawName : "ALA" };
+  if (!rows.length) throw new Error("The residue table has no rows.");
+  if (rows.length > MAX_RESIDUES) throw new Error(`The web version handles up to ${MAX_RESIDUES} residues.`);
+  return rows.map((cells) => {
+    const token = parseResidueToken(cells[column("residue")]);
+    const values = {
+      name: token.name,
+      resSeq: token.resSeq,
+      icode: token.icode,
+      chain: column("chain") >= 0 && cells[column("chain")] ? cells[column("chain")].slice(0, 1) : "A",
+      keepBlanks: true,
+    };
     for (const field of RESIDUE_FIELDS) {
       const index = column(CSV_COLUMNS[field]);
-      values[field] = index < 0 || cells[index] === undefined || cells[index] === "-" ? "" : cells[index];
+      const raw = index < 0 || cells[index] === undefined ? "" : cells[index];
+      values[field] = raw === "-" ? "" : raw;
     }
     return values;
   });
@@ -517,7 +591,12 @@ async function loadResidueFile(input) {
 
 function residueRequestBody() {
   return currentResidueValues().map((values, i) => {
-    const residue = { res_name: values.name };
+    const residue = {
+      res_name: values.name,
+      chain: values.chain || "A",
+      icode: values.icode || "",
+      res_seq: values.resSeq ? Number(values.resSeq) : null,
+    };
     for (const field of RESIDUE_FIELDS) {
       const raw = values[field];
       if (raw !== undefined && raw !== "" && Number.isNaN(Number(raw))) {
@@ -559,6 +638,7 @@ async function convert(kind) {
       }));
     }
   } catch (error) {
+    $("#results").hidden = true;
     showError(error.message);
   } finally {
     button.disabled = false;
@@ -697,7 +777,13 @@ function elementOf(name) {
 
 function setStructure(atoms, bonds) {
   let shown = atoms.map((atom, index) => ({ ...atom, index }));
-  if (shown.length > MAX_DRAWN_ATOMS) shown = shown.filter((a) => a.name === "CA");
+  const caOnly = shown.length > MAX_DRAWN_ATOMS;
+  if (caOnly) shown = shown.filter((a) => a.name === "CA");
+  if (!shown.length) {
+    state.structure = null;
+    drawStructure();
+    return;
+  }
   const keep = new Map(shown.map((a, i) => [a.index, i]));
   const centre = ["x", "y", "z"].map((k) => shown.reduce((sum, a) => sum + a[k], 0) / shown.length);
   const points = shown.map((a) => ({
@@ -706,11 +792,21 @@ function setStructure(atoms, bonds) {
   }));
   const radius = Math.max(1, ...points.map(({ p }) => Math.hypot(p[0], p[1], p[2])));
   const lines = [];
-  for (const [i, j] of bonds) {
-    if (!keep.has(i) || !keep.has(j)) continue;
-    const a = points[keep.get(i)].p;
-    const b = points[keep.get(j)].p;
-    if (Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) <= MAX_DRAWN_BOND) lines.push([keep.get(i), keep.get(j)]);
+  if (caOnly) {
+    // CA–CA is about 3.8 Å, so the covalent-bond cutoff would hide the whole chain.
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1].p;
+      const b = points[i].p;
+      const sameChain = (shown[i].chain || "A") === (shown[i - 1].chain || "A");
+      if (sameChain && Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) <= 4.5) lines.push([i - 1, i]);
+    }
+  } else {
+    for (const [i, j] of bonds) {
+      if (!keep.has(i) || !keep.has(j)) continue;
+      const a = points[keep.get(i)].p;
+      const b = points[keep.get(j)].p;
+      if (Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) <= MAX_DRAWN_BOND) lines.push([keep.get(i), keep.get(j)]);
+    }
   }
   state.structure = { points, lines, radius };
   drawStructure();
@@ -828,10 +924,12 @@ function init() {
   }
 
   $("#bb-file").addEventListener("change", () => loadResidueFile($("#bb-file")));
-  $("#bb-reset").addEventListener("click", () => {
-    applyPresetToTable("alpha-helix");
-    hideError();
-  });
+  for (const button of $$("[data-preset]")) {
+    button.addEventListener("click", () => {
+      applyPresetToTable(button.dataset.preset);
+      hideError();
+    });
+  }
   $("#bb-add-residue").addEventListener("click", () => {
     const last = currentResidueValues().slice(-1)[0];
     const row = addResidueRow({

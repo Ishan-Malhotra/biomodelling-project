@@ -20,6 +20,7 @@ class Atom:
     res_name: str = "UNK"
     res_seq: int = 1
     chain: str = "A"
+    icode: str = ""
 
 
 @dataclass
@@ -52,6 +53,7 @@ class ResidueTorsions:
     o_bond: Optional[float] = None
     o_angle: Optional[float] = None
     o_dihedral: Optional[float] = None
+    icode: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -77,10 +79,13 @@ def _pick_reference(coords, near, before, exclude=(), line=None) -> int:
     window = range(max(0, before - SEARCH_WINDOW), before)
     candidates = [m for m in window if m not in exclude] or [m for m in range(before) if m not in exclude]
     candidates.sort(key=lambda m: geo.distance(coords[m], coords[near]))
+    if not candidates:
+        raise ValueError("no earlier atom to use as a reference")
     if line is not None:
         for m in candidates:
             if not _collinear(coords[line[0]], coords[line[1]], coords[m]):
                 return m
+        raise ValueError("no reference atom gives a defined angle")
     return candidates[0]
 
 
@@ -243,26 +248,27 @@ def backbone_torsions(atoms: Sequence[Atom]) -> List[ResidueTorsions]:
     residues = []
     index = {}
     for atom in atoms:
-        key = (atom.chain, atom.res_seq)
+        # Insertion code is part of the residue identity: 27 and 27A are different residues.
+        key = (atom.chain, atom.res_seq, atom.icode)
         if key not in index:
             index[key] = len(residues)
-            residues.append((atom.chain, atom.res_seq, atom.res_name, {}))
+            residues.append((atom.chain, atom.res_seq, atom.icode, atom.res_name, {}))
         if atom.name in BACKBONE_ATOMS or atom.name == "O":
-            residues[index[key]][3].setdefault(atom.name, atom.xyz)
+            residues[index[key]][4].setdefault(atom.name, atom.xyz)
 
-    complete = [r for r in residues if all(name in r[3] for name in BACKBONE_ATOMS)]
+    complete = [r for r in residues if all(name in r[4] for name in BACKBONE_ATOMS)]
 
     def linked(r1, r2):
-        return r1[0] == r2[0] and geo.distance(r1[3]["C"], r2[3]["N"]) < PEPTIDE_BOND_MAX
+        return r1[0] == r2[0] and geo.distance(r1[4]["C"], r2[4]["N"]) < PEPTIDE_BOND_MAX
 
     result = []
-    for i, (chain, seq, res_name, bb) in enumerate(complete):
+    for i, (chain, seq, icode, res_name, bb) in enumerate(complete):
         prev = complete[i - 1] if i > 0 and linked(complete[i - 1], complete[i]) else None
         nxt = complete[i + 1] if i + 1 < len(complete) and linked(complete[i], complete[i + 1]) else None
-        phi = geo.dihedral(prev[3]["C"], bb["N"], bb["CA"], bb["C"]) if prev else None
-        psi = geo.dihedral(bb["N"], bb["CA"], bb["C"], nxt[3]["N"]) if nxt else None
-        omega = geo.dihedral(bb["CA"], bb["C"], nxt[3]["N"], nxt[3]["CA"]) if nxt else None
-        torsions = ResidueTorsions(res_name, seq, chain, phi, psi, omega)
+        phi = geo.dihedral(prev[4]["C"], bb["N"], bb["CA"], bb["C"]) if prev else None
+        psi = geo.dihedral(bb["N"], bb["CA"], bb["C"], nxt[4]["N"]) if nxt else None
+        omega = geo.dihedral(bb["CA"], bb["C"], nxt[4]["N"], nxt[4]["CA"]) if nxt else None
+        torsions = ResidueTorsions(res_name, seq, chain, phi, psi, omega, icode=icode)
         if "O" in bb:
             torsions.o_bond = geo.distance(bb["C"], bb["O"])
             torsions.o_angle = geo.bond_angle(bb["CA"], bb["C"], bb["O"])
@@ -289,7 +295,12 @@ def complete_residues(residues: Sequence[ResidueTorsions]) -> List[ResidueTorsio
     count = len(residues)
     completed = []
     for i, r in enumerate(residues):
-        label = "residue {} ({}{})".format(i + 1, r.res_name, r.res_seq)
+        label = "residue {} ({}{}{})".format(i + 1, r.res_name, r.res_seq, r.icode or "")
+        if i > 0 and (r.chain or "A") != (residues[i - 1].chain or "A"):
+            raise ValueError(
+                "{} is on chain {} and the previous residue is on chain {}. Separate chains "
+                "cannot be built as one molecule: internal coordinates do not record how they "
+                "sit relative to each other.".format(label, r.chain, residues[i - 1].chain))
         needed = ([("phi", r.phi)] if i > 0 else []) + (
             [("psi", r.psi), ("omega", r.omega)] if i < count - 1 else [])
         missing = [name for name, value in needed if value is None]
@@ -311,7 +322,7 @@ def complete_residues(residues: Sequence[ResidueTorsions]) -> List[ResidueTorsio
             r.phi if i > 0 else None,
             r.psi,
             r.omega if i < count - 1 else None,
-            o_bond, o_angle, o_dihedral,
+            o_bond, o_angle, o_dihedral, r.icode,
         ))
     return completed
 
@@ -344,26 +355,85 @@ def build_backbone(residues: Sequence[ResidueTorsions]) -> List[Atom]:
     entries = build_backbone_zmatrix(residues)
     coords = zmatrix_to_cartesian(entries)
     return [
-        Atom(entry.name, xyz, residues[i // 4].res_name, residues[i // 4].res_seq, residues[i // 4].chain)
+        Atom(entry.name, xyz, res.res_name, res.res_seq, res.chain, res.icode)
         for i, (entry, xyz) in enumerate(zip(entries, coords))
+        for res in (residues[i // 4],)
     ]
+
+
+# A larger error means the rebuild is a different structure, so callers must refuse it.
+DISTANCE_MATCH_TOL = 1e-6
+ANGLE_MATCH_TOL = 1e-4
 
 
 def backbone_torsion_error(atoms: Sequence[Atom], residues: Sequence[ResidueTorsions]) -> float:
     """Largest difference (degrees) between requested angles and those measured from atoms."""
+    got_list = backbone_torsions(atoms)
+    want_list = complete_residues(residues)
+    if len(got_list) != len(want_list):
+        raise ValueError(
+            "rebuilding produced {} residues but {} were requested, so the result was discarded".format(
+                len(got_list), len(want_list)))
     worst = 0.0
-    for got, want in zip(backbone_torsions(atoms), complete_residues(residues)):
+    for got, want in zip(got_list, want_list):
+        if (got.chain, got.res_seq, got.icode) != (want.chain, want.res_seq, want.icode):
+            raise ValueError(
+                "rebuilt residue {}{}{} on chain {} does not match the residue that was requested".format(
+                    got.res_name, got.res_seq, got.icode, got.chain))
         for measured, requested in ((got.phi, want.phi), (got.psi, want.psi), (got.omega, want.omega),
                                     (got.o_angle, want.o_angle), (got.o_dihedral, want.o_dihedral)):
             if measured is not None and requested is not None:
                 worst = max(worst, abs(geo.angle_difference(measured, requested)))
+        if got.o_bond is not None and want.o_bond is not None:
+            bond_error = abs(got.o_bond - want.o_bond)
+            if bond_error > DISTANCE_MATCH_TOL:
+                raise ValueError(
+                    "the built C=O bond does not match the requested length "
+                    "(error {:.3e} Å). Nothing was converted.".format(bond_error))
     return worst
 
 
+def require_distance_match(original: Sequence[Vec3], rebuilt: Sequence[Vec3]) -> float:
+    """Return the distance error, or raise if the rebuild is a different shape."""
+    if len(original) != len(rebuilt):
+        raise ValueError("rebuilding changed the number of atoms, so the result was discarded")
+    deviation = max_distance_deviation(original, rebuilt)
+    if deviation > DISTANCE_MATCH_TOL:
+        raise ValueError(
+            "rebuilding from these internal coordinates does not reproduce the structure "
+            "(largest distance error {:.3e} Å). Nothing was converted.".format(deviation))
+    return deviation
+
+
+def require_internal_match(entries: Sequence[ZEntry], coords: Sequence[Vec3]) -> Tuple[float, float, float]:
+    """Return bond, angle and dihedral errors, or raise if they do not match the input."""
+    bond, angle, dihedral = zmatrix_errors(entries, coords)
+    if bond > DISTANCE_MATCH_TOL or angle > ANGLE_MATCH_TOL or dihedral > ANGLE_MATCH_TOL:
+        raise ValueError(
+            "rebuilding does not reproduce the internal coordinates "
+            "(errors {:.3e} Å, {:.3e}°, {:.3e}°). Nothing was converted.".format(bond, angle, dihedral))
+    return bond, angle, dihedral
+
+
+def require_torsion_match(atoms: Sequence[Atom], residues: Sequence[ResidueTorsions]) -> float:
+    """Return the torsion error, or raise if the built backbone is not the one requested."""
+    error = backbone_torsion_error(atoms, residues)
+    if error > ANGLE_MATCH_TOL:
+        raise ValueError(
+            "the built backbone does not have the angles that were requested "
+            "(largest error {:.3e}). Nothing was converted.".format(error))
+    return error
+
+
 def ramachandran_region(phi: Optional[float], psi: Optional[float]) -> str:
-    """Rough secondary-structure region of a (phi, psi) pair."""
+    """Rough secondary-structure region of a (phi, psi) pair.
+
+    Angles are folded into [-180, 180) first, so 180 and -180 are the same conformation.
+    """
     if phi is None or psi is None:
         return "-"
+    phi = geo.angle_difference(phi, 0.0)
+    psi = geo.angle_difference(psi, 0.0)
     if -180 <= phi <= -45 and (psi >= 90 or psi <= -150):
         return "beta"
     if -160 <= phi <= -20 and -120 <= psi <= 50:

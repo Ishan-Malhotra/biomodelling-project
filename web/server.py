@@ -39,6 +39,9 @@ class ZMatrixRequest(BaseModel):
 
 class ResidueInput(BaseModel):
     res_name: Optional[str] = None
+    res_seq: Optional[int] = None
+    chain: Optional[str] = None
+    icode: Optional[str] = None
     phi: Optional[float] = None
     psi: Optional[float] = None
     omega: Optional[float] = None
@@ -60,7 +63,7 @@ def bad_request(exc: Exception) -> HTTPException:
 
 def atom_json(atom: conv.Atom) -> dict:
     x, y, z = atom.xyz
-    return {"name": atom.name, "residue": "{}{}".format(atom.res_name, atom.res_seq),
+    return {"name": atom.name, "residue": io.residue_id(atom.res_name, atom.res_seq, atom.icode),
             "chain": atom.chain, "x": x, "y": y, "z": z}
 
 
@@ -81,7 +84,7 @@ def residue_torsions(atoms: List[conv.Atom]) -> List[conv.ResidueTorsions]:
 
 
 def torsions_json(torsions: List[conv.ResidueTorsions]) -> List[dict]:
-    return [{"residue": "{}{}".format(t.res_name, t.res_seq), "chain": t.chain,
+    return [{"residue": io.residue_id(t.res_name, t.res_seq, t.icode), "chain": t.chain,
              "phi": t.phi, "psi": t.psi, "omega": t.omega,
              "o_bond": t.o_bond, "o_angle": t.o_angle, "o_dihedral": t.o_dihedral,
              "region": conv.ramachandran_region(t.phi, t.psi)} for t in torsions]
@@ -117,16 +120,18 @@ def cartesian_to_internal(req: CartesianRequest):
             raise ValueError("the web version handles up to {} atoms; use the terminal app for larger structures".format(MAX_ATOMS))
         entries = conv.cartesian_to_zmatrix(atoms)
         rebuilt = conv.zmatrix_to_cartesian(entries)
+        # Distances are the same for a mirror image, so the signed angles are checked too.
+        matched = conv.require_internal_match(entries, rebuilt)
+        if len(atoms) <= DISTANCE_CHECK_LIMIT:
+            deviation = conv.require_distance_match([a.xyz for a in atoms], rebuilt)
+            check = {"kind": "distances", "pairs": len(atoms) * (len(atoms) - 1) // 2,
+                     "max_deviation": deviation}
+        else:
+            bond, angle, dihedral = matched
+            check = {"kind": "internal", "bond": bond, "angle": angle, "dihedral": dihedral}
+        torsions = residue_torsions(atoms)
     except ValueError as exc:
         raise bad_request(exc) from None
-
-    if len(atoms) <= DISTANCE_CHECK_LIMIT:
-        check = {"kind": "distances", "pairs": len(atoms) * (len(atoms) - 1) // 2,
-                 "max_deviation": conv.max_distance_deviation([a.xyz for a in atoms], rebuilt)}
-    else:
-        check = internal_check(entries, rebuilt)
-
-    torsions = residue_torsions(atoms)
     downloads = []
     if torsions:
         downloads.append({"label": "Download residue table (.csv)", "filename": "residues.csv",
@@ -150,14 +155,16 @@ def internal_to_cartesian(req: ZMatrixRequest):
         if len(entries) > MAX_ATOMS:
             raise ValueError("the web version handles up to {} atoms".format(MAX_ATOMS))
         coords = conv.zmatrix_to_cartesian(entries)
+        conv.require_internal_match(entries, coords)
+        atoms = io.assign_residues([conv.Atom(e.name, xyz) for e, xyz in zip(entries, coords)])
+        torsions = residue_torsions(atoms)
     except ValueError as exc:
         raise bad_request(exc) from None
 
-    atoms = io.assign_residues([conv.Atom(e.name, xyz) for e, xyz in zip(entries, coords)])
     return {
         "atoms": [atom_json(a) for a in atoms],
         "zmatrix": [zentry_json(e) for e in entries],
-        "torsions": torsions_json(residue_torsions(atoms)),
+        "torsions": torsions_json(torsions),
         "bonds": bonds_json(entries),
         "check": internal_check(entries, coords),
         "downloads": [{"label": "Download PDB file", "filename": "structure.pdb",
@@ -183,13 +190,17 @@ def backbone_to_cartesian(req: BackboneRequest):
             names = io.sequence_to_residues(req.sequence, len(given))
             residues = [
                 conv.ResidueTorsions(
-                    (r.res_name or names[i]).strip().upper()[:3] or names[i], i + 1, "A",
-                    r.phi, r.psi, r.omega, r.o_bond, r.o_angle, r.o_dihedral)
+                    (r.res_name or names[i]).strip().upper()[:3] or names[i],
+                    r.res_seq if r.res_seq is not None else i + 1,
+                    (r.chain or "A").strip()[:1] or "A",
+                    r.phi, r.psi, r.omega, r.o_bond, r.o_angle, r.o_dihedral,
+                    (r.icode or "").strip()[:1].upper())
                 for i, r in enumerate(given)
             ]
         residues = conv.complete_residues(residues)
         entries = conv.build_backbone_zmatrix(residues)
         atoms = conv.build_backbone(residues)
+        torsion_error = conv.require_torsion_match(atoms, residues)
     except ValueError as exc:
         raise bad_request(exc) from None
 
@@ -199,7 +210,7 @@ def backbone_to_cartesian(req: BackboneRequest):
         "torsions": torsions_json(conv.backbone_torsions(atoms)),
         "input": torsions_json(residues),
         "bonds": bonds_json(entries),
-        "check": {"kind": "torsions", "max_error": conv.backbone_torsion_error(atoms, residues)},
+        "check": {"kind": "torsions", "max_error": torsion_error},
         "downloads": [
             {"label": "Download PDB file", "filename": "backbone.pdb",
              "text": io.pdb_text(atoms, credit("Backbone built"))},

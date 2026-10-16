@@ -64,7 +64,6 @@
         </div>
         <div class="actions">
           <button type="button" class="convert" data-convert="cartesian-form">Convert to internal coordinates</button>
-          <span class="shortcut">Enter moves to the next box</span>
         </div>
       </div>
 
@@ -78,7 +77,6 @@
         <textarea id="cartesian-text" spellcheck="false" rows="10" placeholder="N   0.000  0.000  0.000&#10;CA  1.458  0.000  0.000&#10;C   2.009  1.422  0.000&#10;O   1.356  2.294 -0.586"></textarea>
         <div class="actions">
           <button type="button" class="convert" data-convert="cartesian">Convert to internal coordinates</button>
-          <span class="shortcut">or press Ctrl/⌘ + Enter</span>
         </div>
       </div>
     </section>
@@ -105,7 +103,6 @@ Atom 4+   NAME  bond  angle  dihedral</pre>
         <textarea id="zmatrix-text" spellcheck="false" rows="10" placeholder="N&#10;CA  1.458&#10;C   1.525  111.2&#10;N   1.329  116.2  -47"></textarea>
         <div class="actions">
           <button type="button" class="convert" data-convert="zmatrix">Convert to Cartesian coordinates</button>
-          <span class="shortcut">or press Ctrl/⌘ + Enter</span>
         </div>
       </div>
 
@@ -113,7 +110,10 @@ Atom 4+   NAME  bond  angle  dihedral</pre>
         <p class="hint">Pick the amino acid in each row. Residue 1 has no φ and the last residue has no ω, because those angles need a neighbouring residue. Leave N–CA–C–O blank to use ψ + 180°, which keeps O in the peptide plane.</p>
         <div class="toolbar">
           <label class="tool file-tool">Open a residue table (.csv)…<input type="file" accept=".csv,.txt" id="bb-file"></label>
-          <button type="button" class="tool" id="bb-reset">Reset to α-helix values</button>
+          <button type="button" class="tool" data-preset="alpha-helix">α-helix</button>
+          <button type="button" class="tool" data-preset="beta-strand">β-strand</button>
+          <button type="button" class="tool" data-preset="polyproline-II">Polyproline II</button>
+          <button type="button" class="tool" data-preset="extended">Extended</button>
         </div>
         <div class="table-wrap short">
           <table class="data residue-form" id="bb-table">
@@ -165,6 +165,6 @@ Atom 4+   NAME  bond  angle  dihedral</pre>
     </section>
   </main>
 
-  <script src="/app.js?v=5"></script>
+  <script src="/app.js?v=8"></script>
 </body>
 </html>

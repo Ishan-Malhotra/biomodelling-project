@@ -65,8 +65,13 @@ def dihedral(a, b, c, d):
     b1 = sub(b, a)
     b2 = sub(c, b)
     b3 = sub(d, c)
+    if norm(b2) < EPS:
+        raise ValueError("two atoms occupy the same position")
     n1 = cross(b1, b2)
     n2 = cross(b2, b3)
+    # atan2(0, 0) is 0, which would report a real angle for an undefined dihedral.
+    if norm(n1) < EPS or norm(n2) < EPS:
+        raise ValueError("the dihedral is undefined because the atoms are collinear")
     x = dot(n1, n2)
     y = dot(cross(n1, n2), unit(b2))
     angle = math.degrees(math.atan2(y, x))
