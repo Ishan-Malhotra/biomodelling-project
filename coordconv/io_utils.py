@@ -343,6 +343,41 @@ def write_zmatrix(entries: Sequence[ZEntry], path: str, title: Optional[str] = N
         fh.write(zmatrix_text(entries, title))
 
 
+def amber_internal_text(entries: Sequence[ZEntry]) -> str:
+    """Write a Z-matrix as AMBER internal-coordinate rows.
+
+    Columns are atom number, name, type, tree symbol, the three reference atom
+    numbers, bond, angle, dihedral and charge. Cartesian coordinates do not
+    record an AMBER atom type or partial charge, so the type is the element,
+    the tree symbol is M and the charge is 0. The first three atoms use the
+    AMBER frame references (0, -1, -2), matching how those atoms are placed.
+    """
+    lines = []
+    for i, entry in enumerate(entries):
+        if i == 0:
+            refs = (0, -1, -2)
+            bond = angle = dihedral = 0.0
+        elif i == 1:
+            refs = (entry.bond_ref + 1, 0, -1)
+            bond, angle, dihedral = entry.bond, 0.0, 0.0
+        elif i == 2:
+            refs = (entry.bond_ref + 1, entry.angle_ref + 1, 0)
+            bond, angle, dihedral = entry.bond, entry.angle, 0.0
+        else:
+            refs = (entry.bond_ref + 1, entry.angle_ref + 1, entry.dihedral_ref + 1)
+            bond, angle, dihedral = entry.bond, entry.angle, entry.dihedral
+        lines.append(
+            "{:4d}  {:<4s}  {:<4s}  {:<4s} {:4d} {:4d} {:4d} {:12.6f} {:12.6f} {:12.6f} {:10.5f}".format(
+                i + 1, entry.name, _element(entry.name), "M",
+                refs[0], refs[1], refs[2], bond, angle, dihedral, 0.0))
+    return "\n".join(lines) + "\n"
+
+
+def write_amber_internal(entries: Sequence[ZEntry], path: str) -> None:
+    with open(path, "w") as fh:
+        fh.write(amber_internal_text(entries))
+
+
 # ---------------------------------------------------------------------------
 # Residue tables (phi, psi, omega and carbonyl oxygen per residue)
 # ---------------------------------------------------------------------------

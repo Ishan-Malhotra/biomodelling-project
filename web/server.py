@@ -138,6 +138,8 @@ def cartesian_to_internal(req: CartesianRequest):
                           "text": io.residue_table_csv(torsions)})
     downloads.append({"label": "Download Z-matrix (.zmat)", "filename": "zmatrix.zmat",
                       "text": io.zmatrix_text(entries, credit("Z-matrix generated"))})
+    downloads.append({"label": "Download AMBER internal coordinates (.in)", "filename": "internal.in",
+                      "text": io.amber_internal_text(entries)})
     return {
         "atoms": [atom_json(a) for a in atoms],
         "zmatrix": [zentry_json(e) for e in entries],

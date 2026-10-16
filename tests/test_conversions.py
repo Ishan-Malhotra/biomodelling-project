@@ -325,6 +325,17 @@ class ProfessorInputTests(unittest.TestCase):
         bond, angle, dihedral = conv.require_internal_match(entries, coords)
         self.assertLess(max(bond, angle, dihedral), 1e-9)
 
+    def test_cartesian_conversion_downloads_as_amber_internal(self):
+        atoms = io.read_pdb(os.path.join(INPUTS, "cartesiona_coordinate_Peptide.pdb"))
+        entries = conv.cartesian_to_zmatrix(atoms)
+        loaded = io.parse_zmatrix_text(io.amber_internal_text(entries))
+        self.assertEqual([e.name for e in loaded], [e.name for e in entries])
+        self.assertEqual(loaded[0].bond_ref, None)
+        self.assertEqual((loaded[1].bond_ref, loaded[1].angle_ref), (entries[1].bond_ref, None))
+        coords = conv.zmatrix_to_cartesian(loaded)
+        bond, angle, dihedral = conv.require_internal_match(entries, coords)
+        self.assertLess(max(bond, angle, dihedral), 1e-4)
+
     def test_amber_third_atom_must_lie_in_the_xy_plane(self):
         text = "\n".join([
             "1  DUMM  DU  M  0  -1  -2  0.000  0.000  0.000  0.00000",

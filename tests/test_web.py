@@ -43,11 +43,15 @@ class WebApiTests(unittest.TestCase):
                                  json={"count": 4, "preset": "alpha-helix"}).json()
         zmat = self.client.post("/api/cartesian-to-internal",
                                 json={"text": helix["downloads"][0]["text"]}).json()
-        self.assertEqual([d["filename"] for d in zmat["downloads"]], ["residues.csv", "zmatrix.zmat"])
+        self.assertEqual([d["filename"] for d in zmat["downloads"]],
+                         ["residues.csv", "zmatrix.zmat", "internal.in"])
         self.assertEqual(len(zmat["torsions"]), 4)
         self.assertIsNotNone(zmat["torsions"][0]["o_dihedral"])
         data = self.client.post("/api/internal-to-cartesian", json={"text": zmat["downloads"][1]["text"]}).json()
         self.assertEqual(len(data["atoms"]), 16)
+        amber = self.client.post("/api/internal-to-cartesian", json={"text": zmat["downloads"][2]["text"]}).json()
+        self.assertEqual(len(amber["atoms"]), 16)
+        self.assertLess(amber["check"]["dihedral"], 1e-4)
         self.assertTrue(data["downloads"][0]["text"].startswith("REMARK"))
 
     def test_backbone_preset_and_custom(self):

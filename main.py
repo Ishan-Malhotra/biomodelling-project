@@ -404,8 +404,12 @@ def show_cartesian_results(atoms):
         "zmatrix_{}.zmat".format(timestamp()),
         lambda path: io.write_zmatrix(entries, path, title),
     ))
+    save_amber = ("I", "Save AMBER internal coordinates (.in)", lambda: save_prompt(
+        "internal_{}.in".format(timestamp()),
+        lambda path: io.write_amber_internal(entries, path),
+    ))
     if not is_protein:
-        return results_menu([save_zmatrix])
+        return results_menu([save_zmatrix, save_amber])
 
     def write_residue_table(path):
         with open(path, "w") as fh:
@@ -416,6 +420,7 @@ def show_cartesian_results(atoms):
             "residues_{}.csv".format(timestamp()), write_residue_table)),
         ("Z", "Show the full Z-matrix (every atom)", show_zmatrix),
         save_zmatrix,
+        save_amber,
     ])
 
 
